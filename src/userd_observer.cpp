@@ -49,6 +49,8 @@ struct State {
     bool reads_armed = false; unsigned rounds = 0; uint64_t read_deadline = 0;
     std::vector<uint64_t> userd_addresses;
     uint64_t ring_address = 0; unsigned ring_entries = 0;
+    std::vector<uint64_t> ring_addresses;
+    std::vector<unsigned> ring_counts;
 };
 State& state() { static auto* s = new State; return *s; }
 uint64_t ns() { timespec ts{}; clock_gettime(CLOCK_MONOTONIC_RAW, &ts); return uint64_t(ts.tv_sec) * 1000000000 + ts.tv_nsec; }
@@ -82,7 +84,7 @@ uint64_t emit(const char* kind, uint64_t begin, uint64_t end, const std::string&
     // During the short read window any captured syscall, even an unrelated one,
     // invalidates the live audit. Do not guess which topology changes are safe.
     if (s.reads_armed && strcmp(kind, "userd_sample") && strcmp(kind, "ring_sample") &&
-        strcmp(kind, "ring_progress") && strcmp(kind, "mark")) s.failed = true;
+        strcmp(kind, "ring_progress") && strcmp(kind, "ring_set_sample") && strcmp(kind, "mark")) s.failed = true;
     if (s.owner != getpid() || s.log < 0 || s.seq >= 20000) { s.failed = true; return 0; }
     std::ostringstream row;
     row << "{\"seq\":" << ++s.seq << ",\"pid\":" << s.owner << ",\"tid\":" << syscall(SYS_gettid)
@@ -311,6 +313,7 @@ extern "C" int userd_observer_arm_reads(uint64_t sequence, const uint64_t* addre
     s.userd_addresses.assign(addresses, addresses + count);
     s.read_deadline = ns() + 3000000000ULL; s.reads_armed = true; s.rounds = 0;
     s.ring_address = 0; s.ring_entries = 0;
+    s.ring_addresses.clear(); s.ring_counts.clear();
     return 1;
 }
 extern "C" int userd_observer_sample(const char* label, uint64_t api_begin, uint64_t api_end, int result) {
@@ -394,7 +397,64 @@ extern "C" int userd_observer_finish_reads() {
     Guard guard; auto& s = state(); std::lock_guard<std::recursive_mutex> lock(s.mutex);
     if (!s.reads_armed || s.failed || s.owner != getpid()) return 0;
     s.reads_armed = false; const auto now = ns();
-    return emit("mark", now, now, s.ring_address ? ",\"label\":\"ring_reads_finished\"" : ",\"label\":\"reads_finished\"") ? static_cast<int>(s.rounds) : 0;
+    const char* label = !s.ring_addresses.empty() ? ",\"label\":\"graph_reads_finished\"" :
+                       (s.ring_address ? ",\"label\":\"ring_reads_finished\"" : ",\"label\":\"reads_finished\"");
+    return emit("mark", now, now, label) ? static_cast<int>(s.rounds) : 0;
+}
+extern "C" int userd_observer_arm_ring_set(uint64_t sequence, const uint64_t* userds,
+                                         const uint64_t* rings, const unsigned* entries, unsigned count) {
+    if (!gpfifo_metadata || !rings || !entries || !count || count > 32) return 0;
+    for (unsigned i = 0; i < count; ++i) {
+        if (!rings[i] || rings[i] % 8 || !entries[i] || entries[i] > 4096 || (entries[i] & (entries[i] - 1))) return 0;
+        for (unsigned j = 0; j < i; ++j) if (rings[i] == rings[j]) return 0;
+    }
+    if (!userd_observer_arm_reads(sequence, userds, count)) return 0;
+    Guard guard; auto& s = state(); std::lock_guard<std::recursive_mutex> lock(s.mutex);
+    if (s.failed) return 0;
+    s.ring_addresses.assign(rings, rings + count); s.ring_counts.assign(entries, entries + count);
+    return 1;
+}
+extern "C" int userd_observer_ring_set_sample(const char* label, unsigned index, uint32_t* puts) {
+    if (!recording || inside || !label || strspn(label, "abcdefghijklmnopqrstuvwxyz_") != strlen(label)) return 0;
+    Guard guard; auto& s = state(); std::lock_guard<std::recursive_mutex> lock(s.mutex);
+    if (s.failed || !s.reads_armed || s.ring_addresses.empty() || s.owner != getpid() || s.rounds >= 256 || ns() >= s.read_deadline) {
+        s.failed = true; return 0;
+    }
+    const auto begin = ns(); std::ostringstream fields;
+    fields << ",\"label\":\"" << label << "\",\"case_index\":" << index << ",\"round\":" << s.rounds++;
+    auto userd = [&](const char* key) {
+        fields << ",\"" << key << "\":[";
+        for (unsigned i = 0; i < s.userd_addresses.size(); ++i) {
+            const auto* p = reinterpret_cast<const Nvc56fControl*>(s.userd_addresses[i]);
+            const auto t0 = ns();
+            asm volatile("lfence" ::: "memory"); const uint32_t get = p->GPGet;
+            asm volatile("lfence" ::: "memory"); const uint32_t put = p->GPPut;
+            asm volatile("lfence" ::: "memory"); const auto t1 = ns();
+            if (puts) puts[i] = put;
+            if (i) fields << ',';
+            fields << "{\"ordinal\":" << i << ",\"begin_ns\":" << t0 << ",\"end_ns\":" << t1
+                   << ",\"get\":" << get << ",\"put\":" << put << '}';
+        }
+        fields << ']';
+    };
+    userd("userd_before"); fields << ",\"rings\":[";
+    for (unsigned channel = 0; channel < s.ring_addresses.size(); ++channel) {
+        if (channel) fields << ',';
+        fields << "{\"ordinal\":" << channel;
+        auto* ring = reinterpret_cast<const volatile uint64_t*>(s.ring_addresses[channel]);
+        for (int pass = 0; pass < 2; ++pass) {
+            fields << ",\"ring_" << (pass ? "second" : "first") << "\":[";
+            for (unsigned j = 0; j < s.ring_counts[channel]; ++j) {
+                asm volatile("lfence" ::: "memory"); const uint64_t value = ring[j];
+                if (j) fields << ',';
+                fields << '"' << std::hex << std::setfill('0') << std::setw(16) << value << '"' << std::dec;
+            }
+            asm volatile("lfence" ::: "memory"); fields << ']';
+        }
+        fields << '}';
+    }
+    fields << ']'; userd("userd_after");
+    return emit("ring_set_sample", begin, ns(), fields.str()) ? 1 : 0;
 }
 extern "C" int ioctl(int fd, unsigned long request, ...) noexcept {
     va_list args; va_start(args, request); void* arg = va_arg(args, void*); va_end(args);

@@ -12,14 +12,14 @@ p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--build', type=Path, default=Path('build-userd'))
 p.add_argument('--gpu', type=int, default=0)
 p.add_argument('--output', type=Path, required=True)
-p.add_argument('--mode', choices=('userd-map', 'userd-progress', 'gpfifo-entry'), default='userd-map')
+p.add_argument('--mode', choices=('userd-map', 'userd-progress', 'gpfifo-entry', 'graph-entry'), default='userd-map')
 p.add_argument('--gpfifo-metadata', action='store_true', help='Passively retain existing UVM mappings; no new request')
 p.add_argument('--entry-wrap', action='store_true', help='Use normal tiny launches to prepare a ring-boundary pair')
 a = p.parse_args()
-if a.mode == 'gpfifo-entry':
+if a.mode in ('gpfifo-entry', 'graph-entry'):
     a.gpfifo_metadata = True
-if a.entry_wrap and a.mode != 'gpfifo-entry':
-    raise SystemExit('--entry-wrap requires --mode gpfifo-entry')
+if a.entry_wrap and a.mode not in ('gpfifo-entry', 'graph-entry'):
+    raise SystemExit('--entry-wrap requires an entry experiment')
 build, output = a.build.resolve(), a.output.resolve()
 output.parent.mkdir(parents=True, exist_ok=True)
 if output.exists() or Path(str(output) + '.userd').exists():
@@ -50,8 +50,9 @@ cache = dict(line.split('=', 1) for line in (build / 'CMakeCache.txt').read_text
 bridge = Path(cache['BENCH_RM_LIBRARY:FILEPATH'])
 files = [build / 'context_ping_pong', build / 'libuserd_observer.so', build / 'kernels.cubin', bridge,
          Path(__file__), Path(__file__).with_name('analyze_userd_mapping.py'), Path(__file__).with_name('analyze_userd_progress.py')]
-if a.mode == 'gpfifo-entry':
+if a.mode in ('gpfifo-entry', 'graph-entry'):
     files += [Path(__file__).with_name('gpfifo_binding.py'), Path(__file__).with_name('analyze_gpfifo_entry.py')]
+if a.mode == 'graph-entry': files.append(Path(__file__).with_name('analyze_graph_entry.py'))
 manifest = {'gpu_preflight': query, 'command': command, 'timeout_s': 45,
             'CUDA_VISIBLE_DEVICES': uuid, 'LD_PRELOAD': env['LD_PRELOAD'], 'gpfifo_metadata': a.gpfifo_metadata,
             'sha256': {str(f): hashlib.sha256(f.read_bytes()).hexdigest() for f in files}}
@@ -64,7 +65,7 @@ with Path(str(output) + '.stdout').open('x') as out, Path(str(output) + '.stderr
             deadline = time.monotonic() + 45
             evidence = Path(str(output) + '.userd')
             try:
-                if a.mode in ('userd-progress', 'gpfifo-entry'):
+                if a.mode in ('userd-progress', 'gpfifo-entry', 'graph-entry'):
                     from analyze_userd_progress import publish_plan
                     while child.poll() is None and not (evidence / 'ready').exists():
                         if time.monotonic() >= deadline:
@@ -82,6 +83,15 @@ with Path(str(output) + '.stdout').open('x') as out, Path(str(output) + '.stderr
                         time.sleep(0.01)
                     if child.poll() is None:
                         publish_ring_plan(evidence, child.pid)
+                if a.mode == 'graph-entry':
+                    from analyze_graph_entry import CASES, publish_graph_plan
+                    for condition in CASES:
+                        while child.poll() is None and not (evidence / f'{condition}.ready').exists():
+                            if time.monotonic() >= deadline:
+                                raise subprocess.TimeoutExpired(command, 45)
+                            time.sleep(0.01)
+                        if child.poll() is None:
+                            publish_graph_plan(evidence, child.pid, condition)
                 code = child.wait(timeout=max(0.01, deadline - time.monotonic()))
             except BaseException:
                 child.kill(); child.wait()

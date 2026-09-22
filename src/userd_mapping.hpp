@@ -1,6 +1,7 @@
 #pragma once
 #include "userd_observer.h"
 #include <rm_control.h>
+#include "graph_entry.hpp"
 
 // Reuse the original owner threads, kernels and bridge lifecycle discovery.
 // Snapshots are idle. Optional progress reads surround one original tiny launch.
@@ -8,7 +9,8 @@
 [[noreturn]] void run_userd_mapping(const Options& o, Output& out) {
     const auto directory = std::filesystem::path(o.output + ".userd");
     const bool entry_probe = o.mode == "gpfifo-entry";
-    const bool progress = o.mode == "userd-progress" || entry_probe;
+    const bool graph_probe = o.mode == "graph-entry";
+    const bool progress = o.mode == "userd-progress" || entry_probe || graph_probe;
     try {
         if (o.device != 0) throw std::runtime_error("userd-map requires visible device 0");
         const char* visible = std::getenv("CUDA_VISIBLE_DEVICES");
@@ -162,6 +164,10 @@
         const auto second = snapshot("after_tiny");
         if (first != second || context_a != after_a || context_b != after_b || context_a == context_b)
             throw std::runtime_error("Context or RM identity changed across snapshots");
+        if (graph_probe) {
+            graph_entry_experiment(o, a, compact, directory, snapshot_seq, snapshot, write);
+            out.meta("graph_capture_complete", 1);
+        }
         if (entry_probe) {
             write("ring_ready.tmp", std::to_string(getpid()) + " " + std::to_string(snapshot_seq));
             std::filesystem::rename(directory / "ring_ready.tmp", directory / "ring_ready");
@@ -234,7 +240,7 @@
         }
         out.meta("context_A_identity", context_a); out.meta("context_B_identity", context_b);
         out.meta("identity_unchanged", 1); out.meta("userd_capture_complete", 1);
-        out.meta("run_status", entry_probe ? "captured_entries_not_yet_analyzed" : (progress ? "captured_progress_not_yet_analyzed" : "captured_mapping_not_yet_analyzed"));
+        out.meta("run_status", graph_probe ? "captured_graph_entries_not_yet_analyzed" : (entry_probe ? "captured_entries_not_yet_analyzed" : (progress ? "captured_progress_not_yet_analyzed" : "captured_mapping_not_yet_analyzed")));
         std::cerr << "USERD capture complete; analyze " << directory << '\n';
         std::cout.flush(); std::cerr.flush();
         // All submitted work completed. Contexts remain alive through the final

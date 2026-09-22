@@ -1,0 +1,6 @@
+condition,api,api_calls,kernel_nodes,active_channels,total_put_delta,changed_entry_count,entry_set,complete_exclusive_observed,bounded_no_api_stable,wrap_observed,preparation_launches,node_outputs_correct_and_fresh,api_begin_rel_ns,api_end_rel_ns,before_begin_rel_ns,before_end_rel_ns,after_begin_rel_ns,after_end_rel_ns,completion_query_begin_rel_ns,completion_query_end_rel_ns,validation_gap_put_delta,rm_envelopes_before,rm_envelopes_after
+direct_one,cuLaunchKernel,1,1,1,1,1,1:11,True,True,False,0,True,0,18460,-22673820,-519771,19908,21399890,44749411,44753973,0,1307,1307
+direct_three,cuLaunchKernel,3,3,1,3,3,1:12|1:13|1:14,True,True,False,0,True,345025455,345051645,323970736,344621700,345052669,365832803,388505050,388508454,0,1307,1307
+graph_one,cuGraphLaunch,1,1,1,1,1,1:15,True,True,False,0,True,687608510,687617546,667363851,687304226,687618254,707689308,730056319,730059756,0,1307,1307
+graph_three,cuGraphLaunch,1,3,1,1,1,1:1023,True,True,True,1007,True,1051447581,1051453817,1031381548,1051155637,1051454626,1071456831,1093676094,1093680069,0,1307,1307
+graph_three_repeat,cuGraphLaunch,1,3,1,1,1,1:0,True,True,False,0,True,1431504124,1431510381,1411797325,1431245181,1431511041,1451001730,1473302061,1473305191,0,1307,1307

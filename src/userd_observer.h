@@ -15,3 +15,6 @@ extern "C" int userd_observer_arm_ring(uint64_t validated_sequence, const uint64
                                      unsigned count, uint64_t ring_address, unsigned entries);
 extern "C" int userd_observer_ring_sample(const char* label, unsigned launch_index,
                                         uint64_t api_begin_ns, uint64_t api_end_ns, int api_result);
+extern "C" int userd_observer_arm_ring_set(uint64_t sequence, const uint64_t* userds,
+                                         const uint64_t* rings, const unsigned* entries, unsigned count);
+extern "C" int userd_observer_ring_set_sample(const char* label, unsigned case_index, uint32_t* puts);

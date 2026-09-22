@@ -1,0 +1,80 @@
+{
+  "environment": {
+    "gpu_model": "NVIDIA A100-PCIE-40GB",
+    "compute_capability": "8.0",
+    "driver_package": "595.58.03",
+    "cuda_driver_api": 13020,
+    "cuda_toolkit": "12.8.61",
+    "mig": "Disabled",
+    "compute_mode": "Default"
+  },
+  "independent_processes": 2,
+  "owner_pid_distinct_verified": true,
+  "measured_conditions": 10,
+  "measured_graph_launches": 6,
+  "observer_build_passed": true,
+  "original_build_without_rm_passed": true,
+  "cpu_tests_passed": 61,
+  "real_capture_counterexamples": [
+    {
+      "case": "wrong_graph_exec",
+      "expected": "reject",
+      "observed": "graph_launch_identity_mismatch",
+      "passed": true
+    },
+    {
+      "case": "stale_node_result",
+      "expected": "reject",
+      "observed": "graph_node_result_stale_or_incorrect",
+      "passed": true
+    },
+    {
+      "case": "missing_node",
+      "expected": "reject",
+      "observed": "graph_node_result_missing",
+      "passed": true
+    },
+    {
+      "case": "wrong_node_token",
+      "expected": "reject",
+      "observed": "graph_node_result_stale_or_incorrect",
+      "passed": true
+    },
+    {
+      "case": "extra_cuda_api",
+      "expected": "reject",
+      "observed": "graph_api_count_mismatch",
+      "passed": true
+    },
+    {
+      "case": "wrong_plan_header",
+      "expected": "reject",
+      "observed": "graph_plan_mismatch",
+      "passed": true
+    },
+    {
+      "case": "missing_entry_inside_interval",
+      "expected": "unresolved",
+      "observed": "graph_epoch_entry_sets_unresolved",
+      "passed": true
+    },
+    {
+      "case": "extra_entry_outside_interval",
+      "expected": "unresolved",
+      "observed": "graph_epoch_entry_sets_unresolved",
+      "passed": true
+    },
+    {
+      "case": "inactive_channel_entry_change",
+      "expected": "unresolved",
+      "observed": "graph_epoch_entry_sets_unresolved",
+      "passed": true
+    }
+  ],
+  "all_ring_count": 8,
+  "entries_per_ring": 1024,
+  "project_rm_controls": 0,
+  "extra_observer_gpu_mappings": 0,
+  "graph_update_calls_in_measurement": 0,
+  "next_phase_executed": false
+}

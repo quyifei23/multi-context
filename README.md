@@ -1,5 +1,9 @@
 # CUDA Driver API 双 Context 接管 microbenchmark
 
+最新 [Graph epoch → GPFIFO entry set](GRAPH_ENTRY_EXPERIMENT.md)：两次独立进程中，预热后的 `graph-1`、
+`graph-3`、同一 GraphExec repeat 均各对应 1 个 entry；`direct-3` 对应 3 个 entries。
+全部 8 个 compute-channel ring 的差分与 PUT 区间一致，含实际 `1023 → 0` wrap；每个 node 输出正确且更新。
+
 最新 [GPFIFO entry 映射实验](GPFIFO_ENTRY_EXPERIMENT.md)：两次独立进程将隔离 tiny launch 唯一对应到
 `ring[7] → ring[8]` 和 `ring[1023] → ring[0]`；每次 PUT 模 1024 加 1，完整 ring 仅该 slot 改变。
 只读取已存在的合法映射。该结果覆盖本次单 launch，不等于完整 epoch 覆盖、硬件消费语义或 rewind 安全性。
@@ -43,7 +47,7 @@ Driver 的 [`cuCtxDestroy` 文档](https://docs.nvidia.com/cuda/archive/12.8.0/c
 
 - `src/main.cpp` 只使用 CUDA **Driver API**。`nvcc` 仅生成 device-only cubin；host 不链接 `libcudart`。
 - 两个长期存活的 owner thread 分别创建、使用、销毁各自的独立 `CUcontext`。第三个线程是 main/controller，不绑定 Context，负责发出 invalidate。
-- 不调用 `cuCtxSetCurrent`、不使用 primary context、Graph、优先级 stream、PyTorch、NCCL 或 VMM。
+- 不调用 `cuCtxSetCurrent`、不使用 primary context、优先级 stream、PyTorch、NCCL 或 VMM；Graph 仅用于新增 `graph-entry` 模式。
 - A 在待命实验中持续存在。严格 baseline 必须销毁 B；进入 test 后 B 预热完成才开始计时。AB/BA 成对交替顺序。
 - 原有接管实验中 B 在同一目标时长的所有 trial 间持续存在；A 每次销毁后在原 owner thread 上重建、预热。Context 重建时间不计入接管延迟。
 - A 为固定迭代数的 FP32 FMA kernel：每 thread 每 iteration 有 256 FMA，8 条独立寄存器依赖链，最后写出结果。默认 `4 × SM count` blocks、256 threads/block。不是按 `clock64` 或墙钟到期退出。

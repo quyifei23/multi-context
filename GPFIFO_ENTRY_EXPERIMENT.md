@@ -5,6 +5,9 @@
 每次完整 1,024-entry ring 仅一个 slot 改变，恰为 launch 前的 PUT，PUT 模 1,024 增加 1。
 这不是“任意 application epoch 已有稳定 queue-entry API”的结论。
 
+后续：[GRAPH_ENTRY_EXPERIMENT.md](GRAPH_ENTRY_EXPERIMENT.md)把一次已预热 GraphExec launch 作为 request，
+验证了 compute-only Graph 的完整 entry set；下文保留 isolated direct launch 阶段的边界。
+
 ## 1. Research question
 
 在已有合法 USERD 读数的基础上，一次明确的 CUDA Driver logical submission 能否唯一对应到当前 channel 的新增 GPFIFO entry？

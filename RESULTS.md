@@ -1,5 +1,8 @@
 # A100 实测结果（2026-09-22）
 
+本文保留原有销毁路径的结果。新增保留 A Context 的实验见 [LIVE_HANDOFF.md](LIVE_HANDOFF.md)：
+B 能在 A 长 kernel 自然结束前执行。两者的 host 提交顺序不同，不能把串行销毁路径的高延迟解释为“存活 Context 之间不能切换”。
+
 **本实验的串行 `destroy → B launch` 路径没有显示提前接管优势。** 约 1 s 的固定工作，
 在 host 观测 A 启动后 100 ms 发出 invalidate，直接销毁后 B 最快在 **967.895 ms** 完成；
 显式等待 A 完成再销毁的对照为 **967.799 ms**。这些是各 10 个样本中的观测最小值，不是硬件下界或 CUDA 保证。
@@ -81,5 +84,5 @@ python3 scripts/summarize.py results/a100_main.csv results/a100_paired.csv > res
 
 没有证明：Context 销毁是快速 cancellation primitive，Driver 必然采用某种硬件机制，或此结论能推广到其他资源规模、驱动与调度环境。
 
-下一步最小实验：在同一套线程、资源、计时条件下，只把 B 提交通知提前到 invalidate 时，让 B 与 destroy 并行。
-它可以检验“必须等 destroy 返回”这一 host 顺序是否限制 B 的响应；这次没有运行该变体。
+后续已完成 [live-handoff](LIVE_HANDOFF.md)：保留 A Context，在 invalidate 时直接通知 B，验证 B 是否必须等待 A 的自然结束。
+“B 与 destroy 并行”仍未运行；它与保留 A 的实验不是同一条件。

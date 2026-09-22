@@ -2,6 +2,8 @@
 
 这份记录区分编译/host 检查与真实 GPU 实验。沙盒内设备不可见；经用户指出隔离原因后，已在沙盒外完成 A100 实测。
 结果见 [RESULTS.md](RESULTS.md)，当前数据不支持“销毁 busy Context 带来提前接管”的假设。
+新增 [LIVE_HANDOFF.md](LIVE_HANDOFF.md) 单独验证保留 A 的路径，已观察到 B 在 A kernel 结束前执行；
+两者的 host 顺序不同。
 
 | 项目 | 本地观测 |
 |---|---|
@@ -43,3 +45,34 @@ clock 估计通过一致性检查的样本共 62 个；1 s 组的 30 个接管�
 没有伪造有效启动时间。失败 clock 估计不影响 CPU 接管完成时间测量。
 
 未验证：Driver 内部是否/如何终止或抢占 kernel，其他 GPU/driver 环境的行为，以及去除测量 instrumentation 后的极限延迟。
+
+## 新增 live-handoff 的验证
+
+新增模式完成 Release 构建。`--help` 显示新模式；非法 mode、fraction、thread 配置仍被拒绝。
+A 的 device source、probe header 及原有 cubin 内容比较相同，没有更改 A kernel 执行逻辑。
+最终源码 review 范围为 host 协调、CSV/metadata、汇总脚本及可选 Nsight 分析脚本；没有新增构建依赖。
+
+| 最终数据集 | 实际运行内容 | 验证结果 |
+|---|---|---|
+| `results/live_handoff_calibrated.csv` | 10/100/1000 ms，每条件 10 次，每组三条件校准并固定 iterations | 90 个测量行有效；30 个 live 样本的 A Context 存活、B 完成后 A Event pending |
+| `results/live_handoff_calibrated_profiled.csv` | 同一最终实现，每条件 2 次；独立 Nsight CUDA trace | 18 个测量行有效；6 个 live 样本均为 A GPU start < B GPU start < B GPU end < A GPU end |
+| `results/live_handoff_legacy_regression.csv` | `--mode all --action both --long-ms 10 --trials 1` | 原有两种 standby、两种 destroy、两个 idle 参考均完成；1 个校准行 |
+
+对普通运行和 profiled 运行的全部 108 个测量行检查了：60 列 CSV、最终 metadata completed、
+CPU affinity、host 时间顺序、延迟差值公式、A 在 invalidate 后 pending、
+live/idle 无 destroy、serial 成功 destroy 后才提交 B、B 完成后 A query 的时间边界。
+对 36 组三条件检查了相同 iterations、完整条件集合、轮换 order；invalidate 的配置延迟为每次 reference 的 10%。
+
+独立 Nsight trace 的 A/B launch 总数为 152/279，和 metadata 完全匹配。
+逐个使用 thread launch 序号与 API correlation ID 匹配被测 kernel，核对同一 GPU、不同 Context；
+6 个 live 样本的 B 全部早于 A 结束，6 个 serial 样本的 B 全部晚于 A 结束。
+错误地将普通运行 CSV 输入该 trace 的分析脚本时，程序非零退出并报告 process/thread 不匹配。
+
+普通运行 10/100 ms live 组共 20 个 GPU-start 时钟估计通过一致性检查；1 s live 组的 10 个估计均无效、保留 nan。
+独立 trace 的 18 个 B API bracket 时钟对齐区间均通过脚本一致性检查；它们仍受局部时钟同速假设限制，
+不用于替换普通运行延迟。GPU A/B 顺序证据本身不需要这个对齐。
+
+Python 脚本语法检查通过；汇总脚本处理旧 48 列和新 60 列 CSV 均成功。
+旧模式回归的 7 行全部有效，destroy/wait-then-destroy 的成功状态与时间顺序检查通过。
+最初未逐组校准的数据 `live_handoff.csv` 和 `live_handoff_profiled.csv` 仅保留为本地探索记录，
+最终报告的普通运行统计只使用带 `_calibrated` 的数据集。

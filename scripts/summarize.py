@@ -31,11 +31,15 @@ def summarize(paths, output):
         for (target, condition), trials in groups.items():
             valid = [r for r in trials if r["valid"] == "1"]
             invalid = len(trials) - len(valid)
-            metrics = (["a_event_ms", "a_effective_gflops"] if trials[0]["experiment"] == "standby"
+            metrics = (["invalidate_to_b_launch_us", "invalidate_to_b_gpu_start_est_us", "b_takeover_us",
+                        "a_event_pending_after_b_complete", "a_event_ms", "destroy_latency_us"]
+                       if trials[0]["experiment"] == "live-handoff"
+                       else ["a_event_ms", "a_effective_gflops"] if trials[0]["experiment"] == "standby"
                        else ["b_request_us"] if condition == "b_with_idle_a"
                        else ["destroy_latency_us", "b_takeover_us", "handoff_us"])
             for metric in metrics:
-                values = [float(r[metric]) for r in valid if math.isfinite(float(r[metric]))]
+                values = [float(r[metric]) for r in valid if math.isfinite(float(r[metric]))
+                          and not (metric == "a_event_pending_after_b_complete" and float(r[metric]) < 0)]
                 stats = [min(values), statistics.median(values), p95(values)] if values else ["NA"] * 3
                 writer.writerow([path, target, condition, metric, len(values), invalid, *stats])
         ratios = defaultdict(list)

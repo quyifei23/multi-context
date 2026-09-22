@@ -26,10 +26,12 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <sys/syscall.h>
 #include <sys/utsname.h>
 #include <thread>
 #include <type_traits>
 #include <utility>
+#include <unistd.h>
 #include <vector>
 
 using Ns = std::int64_t;
@@ -90,7 +92,7 @@ struct Options {
 void usage() {
     std::cout << R"(CUDA Driver API context ping-pong (Linux, default cubin: sm_80/A100)
 Usage: context_ping_pong [options]
-  --mode all|standby|takeover       Default: all
+  --mode all|standby|takeover|live-handoff   Default: all (legacy two experiments)
   --long-ms 10,100,1000            Target durations; fixed work calibrated with Events
   --trials N                      Measured trials per case/target (default: 10)
   --warmup N                      Warmup launches (default: 3, minimum: 1)
@@ -156,8 +158,9 @@ Options parse(int argc, char** argv) {
             while (std::getline(input, part, ',')) o.durations.push_back(number(part));
         } else throw std::runtime_error("Unknown option: " + key);
     }
-    if (o.mode != "all" && o.mode != "standby" && o.mode != "takeover")
-        throw std::runtime_error("--mode must be all, standby, or takeover");
+    if (o.mode != "all" && o.mode != "standby" && o.mode != "takeover" && o.mode != "live-handoff")
+        throw std::runtime_error("--mode must be all, standby, takeover, or live-handoff");
+    if (o.mode == "live-handoff") o.estimate_start = true;
     if (o.action != "destroy" && o.action != "wait-then-destroy" && o.action != "both")
         throw std::runtime_error("--action must be destroy, wait-then-destroy, or both");
     if (o.trials < 1 || o.warmup < 1 || o.threads < 32 || o.threads > 1024 || o.threads % 32)
@@ -198,6 +201,9 @@ struct Sample {
     double b_start_est = kNaN, b_start_low = kNaN, b_start_high = kNaN;
     double clock_bracket_ns = kNaN, clock_offset_change_ns = kNaN;
     int start_est_valid = 0;
+    int a_pending_after_b = -1, a_alive_after_b = -1;
+    Ns a_post_b_query_begin = 0, a_post_b_query_end = 0, a_complete_observed = 0;
+    std::uint64_t a_launch_seq = 0, b_launch_seq = 0;
 };
 
 class Output {
@@ -227,7 +233,12 @@ public:
                     "invalidate_dispatch_us,destroy_latency_us,invalidate_to_destroy_return_us,"
                     "handoff_us,b_launch_api_us,b_request_us,b_takeover_us,B_start_gpu_ns,B_end_gpu_ns,"
                     "t_B_start_est_ns,t_B_start_lower_ns,t_B_start_upper_ns,clock_bracket_ns,"
-                    "clock_offset_change_ns,start_est_valid\n";
+                    "clock_offset_change_ns,start_est_valid,invalidate_to_b_launch_us,"
+                    "invalidate_to_b_gpu_start_est_us,invalidate_to_b_gpu_start_lower_us,"
+                    "invalidate_to_b_gpu_start_upper_us,a_pending_after_invalidate,"
+                    "a_event_pending_after_b_complete,a_context_alive_after_b_complete,"
+                    "t_A_post_B_query_begin_ns,t_A_post_B_query_end_ns,t_A_complete_observed_ns,"
+                    "a_launch_seq,b_launch_seq\n";
         samples_.flush();
     }
     template<class T> void meta(const std::string& key, const T& value) {
@@ -252,7 +263,14 @@ public:
             << delta_us(s.b_launch_return, s.b_launch) << ',' << delta_us(s.b_complete, s.b_launch) << ','
             << delta_us(s.b_complete, s.invalidate) << ',' << s.b_start_gpu_ns << ',' << s.b_end_gpu_ns << ','
             << s.b_start_est << ',' << s.b_start_low << ',' << s.b_start_high << ',' << s.clock_bracket_ns << ','
-            << s.clock_offset_change_ns << ',' << s.start_est_valid << '\n';
+            << s.clock_offset_change_ns << ',' << s.start_est_valid << ','
+            << delta_us(s.b_launch, s.invalidate) << ','
+            << (s.start_est_valid && s.invalidate ? (s.b_start_est - s.invalidate) / 1000.0 : kNaN) << ','
+            << (s.start_est_valid && s.invalidate ? (s.b_start_low - s.invalidate) / 1000.0 : kNaN) << ','
+            << (s.start_est_valid && s.invalidate ? (s.b_start_high - s.invalidate) / 1000.0 : kNaN) << ','
+            << s.a_pending << ',' << s.a_pending_after_b << ',' << s.a_alive_after_b << ','
+            << s.a_post_b_query_begin << ',' << s.a_post_b_query_end << ',' << s.a_complete_observed << ','
+            << s.a_launch_seq << ',' << s.b_launch_seq << '\n';
         samples_.flush();
     }
 };
@@ -267,6 +285,9 @@ class GpuState {
     StartMarker* marker_ = nullptr;
     int blocks_ = 0, threads_ = 0;
     unsigned token_ = 0;
+    // Counts every launch on the owner thread, including warmup/calibration,
+    // across context recreation. Used to correlate an optional Nsight trace.
+    std::uint64_t launch_sequence_ = 0;
 public:
     ~GpuState() {
         if (ctx_) {
@@ -275,6 +296,7 @@ public:
         }
     }
     bool exists() const { return ctx_ != nullptr; }
+    std::uint64_t launch_count() const { return launch_sequence_; }
     void create(CUdevice device, const Options& o, bool is_a) {
         if (ctx_) return;
 #if CUDA_VERSION >= 13000
@@ -319,6 +341,7 @@ public:
         void* args[] = {&output_, &iterations, &probe};
         CU(cuEventRecord(begin_, stream_));
         s.cpu_a = sched_getcpu();
+        s.a_launch_seq = ++launch_sequence_;
         s.a_launch = now_ns();
         CUresult result = cuLaunchKernel(compute_, blocks_, 1, 1, threads_, 1, 1, 0, stream_, args, nullptr);
         s.a_launch_return = now_ns();
@@ -329,7 +352,11 @@ public:
         Sample scratch;
         Sample& s = sample ? *sample : scratch;
         launch_long(iterations, marker, s);
+        return finish_long(iterations, s);
+    }
+    double finish_long(std::uint64_t iterations, Sample& s) {
         CU(cuEventSynchronize(end_));
+        s.a_complete_observed = now_ns();
         float ms = 0;
         CU(cuEventElapsedTime(&ms, begin_, end_));
         if (!(ms > 0 && std::isfinite(ms))) throw std::runtime_error("Invalid A Event duration");
@@ -352,11 +379,12 @@ public:
     }
     CUresult query_done() { return cuEventQuery(end_); }
     void wait_done() { CU(cuEventSynchronize(end_)); }
-    void run_tiny(Sample& s) {
+    void run_tiny(Sample& s, std::atomic<bool>* completed = nullptr) {
         unsigned token = ++token_;
         void* args[] = {&tiny_output_, &token};
         s.cpu_b = sched_getcpu();
         CU(cuEventRecord(begin_, stream_));
+        s.b_launch_seq = ++launch_sequence_;
         s.b_launch = now_ns();
         CUresult result = cuLaunchKernel(tiny_, 1, 1, 1, 1, 1, 1, 0, stream_, args, nullptr);
         s.b_launch_return = now_ns();
@@ -365,6 +393,9 @@ public:
         result = cuEventSynchronize(end_);
         s.b_complete = now_ns();
         CU(result);
+        // Let A query its own Event immediately, before B's elapsed-time query
+        // or DtoH copy can add observation delay. No CUDA handle crosses threads.
+        if (completed) completed->store(true, std::memory_order_release);
         float ms = 0;
         CU(cuEventElapsedTime(&ms, begin_, end_));
         s.b_event_ms = ms;
@@ -475,7 +506,7 @@ void estimate_start(Sample& s, const ClockAnchor& pre, const ClockAnchor& post) 
 }
 
 struct Signals {
-    std::atomic<bool> b_armed{false}, a_started{false}, invalidate{false}, b_go{false}, cancelled{false};
+    std::atomic<bool> b_armed{false}, a_started{false}, invalidate{false}, b_go{false}, b_done{false}, cancelled{false};
 };
 
 bool await_flag(const std::atomic<bool>& flag, const Signals& signals) {
@@ -488,20 +519,25 @@ bool await_flag(const std::atomic<bool>& flag, const Signals& signals) {
 
 void takeover(Worker& a, Worker& b, const Options& o, Sample& s) {
     Signals signals;
+    const bool idle = o.action == "idle";
+    const bool keep_a = idle || o.action == "live-handoff";
     auto b_future = b.submit([&](GpuState& state) {
         try {
             s.b_ready = now_ns();
             signals.b_armed.store(true, std::memory_order_release);
             if (!await_flag(signals.b_go, signals)) return;
             s.b_trigger_seen = now_ns();
-            state.run_tiny(s);
+            state.run_tiny(s, &signals.b_done);
         } catch (...) { signals.cancelled.store(true, std::memory_order_release); throw; }
     });
     auto a_future = a.submit([&](GpuState& state) {
         try {
             if (!await_flag(signals.b_armed, signals)) return;
-            state.launch_long(s.iterations, true, s);
-            state.wait_started(s, s.target_ms);
+            s.cpu_a = sched_getcpu();
+            if (!idle) {
+                state.launch_long(s.iterations, true, s);
+                state.wait_started(s, s.target_ms);
+            }
             signals.a_started.store(true, std::memory_order_release);
             if (!await_flag(signals.invalidate, signals)) return;
             s.invalidate_seen = now_ns();
@@ -510,32 +546,49 @@ void takeover(Worker& a, Worker& b, const Options& o, Sample& s) {
             s.a_query_end = now_ns();
             if (query != CUDA_SUCCESS && query != CUDA_ERROR_NOT_READY) CU(query);
             s.a_pending = query == CUDA_ERROR_NOT_READY;
-            if (o.action == "wait-then-destroy") state.wait_done();
-            CUresult result = state.destroy(&s.destroy_begin, &s.destroy_return);
-            s.destroy_result = static_cast<int>(result);
-            // Wake B only after successful destruction. No use of any A handle.
-            if (result != CUDA_SUCCESS) CU(result);
-            signals.b_go.store(true, std::memory_order_release);
+            if (keep_a) {
+                if (!await_flag(signals.b_done, signals)) return;
+                s.a_post_b_query_begin = now_ns();
+                CUresult post = state.query_done();
+                s.a_post_b_query_end = now_ns();
+                if (post != CUDA_SUCCESS && post != CUDA_ERROR_NOT_READY) CU(post);
+                s.a_pending_after_b = post == CUDA_ERROR_NOT_READY;
+                s.a_alive_after_b = state.exists();
+                // A finishes naturally; its context remains current and alive.
+                if (!idle) state.finish_long(s.iterations, s);
+            } else {
+                if (o.action == "wait-then-destroy") state.wait_done();
+                CUresult result = state.destroy(&s.destroy_begin, &s.destroy_return);
+                s.destroy_result = static_cast<int>(result);
+                if (result != CUDA_SUCCESS) CU(result);
+                s.a_alive_after_b = 0;
+                signals.b_go.store(true, std::memory_order_release);
+            }
         } catch (...) { signals.cancelled.store(true, std::memory_order_release); throw; }
     });
     std::exception_ptr error;
     try {
         if (await_flag(signals.a_started, signals)) {
-            const Ns deadline = s.a_start_observed + static_cast<Ns>(s.invalidate_delay_ms * 1e6);
+            const Ns deadline = idle ? 0 : s.a_start_observed + static_cast<Ns>(s.invalidate_delay_ms * 1e6);
             while (now_ns() < deadline && !signals.cancelled.load(std::memory_order_acquire)) relax_cpu();
             s.cpu_control = sched_getcpu();
             s.invalidate = now_ns();
             signals.invalidate.store(true, std::memory_order_release);
+            // Live/idle launch is not gated by A's Event query or A's thread.
+            if (keep_a) signals.b_go.store(true, std::memory_order_release);
         }
     } catch (...) { signals.cancelled.store(true, std::memory_order_release); error = std::current_exception(); }
     // Always drain both futures before releasing stack data, including on error.
     try { a_future.get(); } catch (...) { error = std::current_exception(); }
     try { b_future.get(); } catch (...) { if (!error) error = std::current_exception(); }
     if (error) std::rethrow_exception(error);
-    if (!s.a_pending) { s.valid = 0; s.status = "a_already_complete"; }
-    if (!(s.b_ready <= s.a_launch && s.a_start_observed <= s.invalidate &&
-          s.invalidate <= s.destroy_begin && s.destroy_begin <= s.destroy_return &&
-          s.destroy_return <= s.b_launch && s.b_launch <= s.b_complete))
+    if (!idle && !s.a_pending) { s.valid = 0; s.status = "a_already_complete"; }
+    if (idle && s.a_pending) throw std::runtime_error("A was not idle in the idle baseline");
+    if (!(s.invalidate <= s.b_launch && s.b_launch <= s.b_complete) ||
+        (!idle && !(s.b_ready <= s.a_launch && s.a_start_observed <= s.invalidate)) ||
+        (!keep_a && !(s.invalidate <= s.destroy_begin && s.destroy_begin <= s.destroy_return && s.destroy_return <= s.b_launch)) ||
+        (keep_a && !(s.destroy_begin == 0 && s.destroy_return == 0 && s.a_alive_after_b == 1 &&
+                     s.b_complete <= s.a_post_b_query_begin && s.a_post_b_query_begin <= s.a_post_b_query_end)))
         throw std::runtime_error("Host timestamp ordering violated");
 }
 
@@ -544,7 +597,7 @@ int attribute(CUdevice device, CUdevice_attribute attr) {
 }
 
 void metadata_before_cuda(Output& out, const Options& o, int argc, char** argv) {
-    out.meta("schema_version", 1);
+    out.meta("schema_version", 2);
     out.meta("run_status", "initializing");
     out.meta("toolkit_version", BENCH_TOOLKIT_VERSION);
     out.meta("cuda_header_version", CUDA_VERSION);
@@ -555,6 +608,8 @@ void metadata_before_cuda(Output& out, const Options& o, int argc, char** argv) 
     if (clock_getres(CLOCK_MONOTONIC_RAW, &resolution) == 0)
         out.meta("host_timer_resolution_ns", resolution.tv_sec * 1000000000LL + resolution.tv_nsec);
     out.meta("run_start_host_ns", now_ns());
+    out.meta("process_pid", getpid());
+    out.meta("thread_control_tid", syscall(SYS_gettid));
     const std::time_t wall = std::time(nullptr);
     std::tm utc{}; gmtime_r(&wall, &utc);
     std::ostringstream date; date << std::put_time(&utc, "%Y-%m-%dT%H:%M:%SZ");
@@ -631,8 +686,8 @@ void experiments(Options& o, Output& out) {
         if (std::string(blocking) != "0") throw std::runtime_error("Unset CUDA_LAUNCH_BLOCKING for asynchronous A launch");
     std::cerr << "GPU: " << name << ", Driver API " << driver << ", Toolkit " << BENCH_TOOLKIT_VERSION << '\n';
     Worker a, b;
-    a.submit([&](GpuState&) { pin_cpu(o.cpu_a); }).get();
-    b.submit([&](GpuState&) { pin_cpu(o.cpu_b); }).get();
+    out.meta("thread_a_tid", a.submit([&](GpuState&) { pin_cpu(o.cpu_a); return syscall(SYS_gettid); }).get());
+    out.meta("thread_b_tid", b.submit([&](GpuState&) { pin_cpu(o.cpu_b); return syscall(SYS_gettid); }).get());
     // Pin controller after creating workers so they do not inherit its affinity.
     pin_cpu(o.cpu_control);
     for (double target : o.durations) {
@@ -655,6 +710,50 @@ void experiments(Options& o, Output& out) {
                 for (int j = 0; j < o.warmup; ++j) { Sample scratch; g.run_tiny(scratch); }
             }
         };
+        if (o.mode == "live-handoff") {
+            b.submit(warm_b).get();
+            const char* conditions[] = {"live-handoff", "serial-destroy", "idle"};
+            for (int trial = 0; trial < o.trials; ++trial) {
+                // Observed execution-time drift can halve a short kernel's
+                // duration. Recalibrate once per triplet, then hold work fixed
+                // across its three conditions. The device code is unchanged.
+                cal = a.submit([&](GpuState& g) {
+                    g.create(device, o, true); return calibrate(g, target, o.warmup);
+                }).get();
+                Sample triplet_cal = sample("calibration", "a_with_idle_b", trial);
+                triplet_cal.a_event_ms = cal.ms;
+                out.row(triplet_cal);
+                for (int order = 0; order < 3; ++order) {
+                    const std::string condition = conditions[(trial + order) % 3];
+                    // Refresh the natural-duration reference immediately before
+                    // each condition, at identical fixed work and with B idle.
+                    const double reference = a.submit([&](GpuState& g) {
+                        g.create(device, o, true);
+                        for (int j = 0; j < o.warmup; ++j) g.run_long(std::min<std::uint64_t>(cal.iterations, 1024), true);
+                        return g.run_long(cal.iterations, true);
+                    }).get();
+                    ClockAnchor pre = b.submit([](GpuState& g) { return clock_anchor(g); }).get();
+                    Sample s = sample("live-handoff", condition, trial);
+                    s.order = order;
+                    s.reference_ms = reference;
+                    s.invalidate_delay_ms = condition == "idle" ? 0 :
+                        o.invalidate_ms >= 0 ? o.invalidate_ms : reference * o.invalidate_fraction;
+                    Options action = o;
+                    action.action = condition == "serial-destroy" ? "destroy" : condition;
+                    try { takeover(a, b, action, s); }
+                    catch (...) { s.valid = 0; s.status = "error"; out.row(s); throw; }
+                    // Both workers have finished their measured work before
+                    // any post-calibration kernels are submitted.
+                    ClockAnchor post = b.submit([](GpuState& g) { return clock_anchor(g); }).get();
+                    estimate_start(s, pre, post);
+                    out.row(s);
+                    std::cerr << condition << ", target " << target << " ms, trial " << trial
+                              << ": B complete " << (s.b_complete - s.invalidate) / 1000.0
+                              << " us, A Event pending after B=" << s.a_pending_after_b << ", " << s.status << '\n';
+                }
+            }
+            continue;
+        }
         if (o.mode != "takeover") {
             for (int trial = 0; trial < o.trials; ++trial) {
                 // Alternate AB/BA paired trials to reduce systematic order bias.
@@ -705,6 +804,8 @@ void experiments(Options& o, Output& out) {
             }
         }
     }
+    out.meta("thread_a_launch_count", a.submit([](GpuState& g) { return g.launch_count(); }).get());
+    out.meta("thread_b_launch_count", b.submit([](GpuState& g) { return g.launch_count(); }).get());
     a.submit([](GpuState& g) { g.close(); }).get();
     b.submit([](GpuState& g) { g.close(); }).get();
 }

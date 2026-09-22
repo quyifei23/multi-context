@@ -12,6 +12,7 @@ p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--build', type=Path, default=Path('build-userd'))
 p.add_argument('--gpu', type=int, default=0)
 p.add_argument('--output', type=Path, required=True)
+p.add_argument('--mode', choices=('userd-map', 'userd-progress'), default='userd-map')
 a = p.parse_args()
 build, output = a.build.resolve(), a.output.resolve()
 output.parent.mkdir(parents=True, exist_ok=True)
@@ -31,14 +32,15 @@ if os.environ.get('LD_PRELOAD'):
 env = os.environ.copy()
 env['CUDA_VISIBLE_DEVICES'] = uuid
 env['LD_PRELOAD'] = str(build / 'libuserd_observer.so')
-command = [str(build / 'context_ping_pong'), '--mode', 'userd-map', '--cpu-a', '0', '--cpu-b', '1',
+command = [str(build / 'context_ping_pong'), '--mode', a.mode, '--cpu-a', '0', '--cpu-b', '1',
            '--cpu-control', '2', '--query-timeout-ms', '3000', '--output', str(output)]
 # Cache paths are retained locally for exact reproducibility; never copied into
 # the deidentified public outputs.
 cache = dict(line.split('=', 1) for line in (build / 'CMakeCache.txt').read_text().splitlines()
              if '=' in line and not line.startswith(('#', '//')))
 bridge = Path(cache['BENCH_RM_LIBRARY:FILEPATH'])
-files = [build / 'context_ping_pong', build / 'libuserd_observer.so', build / 'kernels.cubin', bridge]
+files = [build / 'context_ping_pong', build / 'libuserd_observer.so', build / 'kernels.cubin', bridge,
+         Path(__file__), Path(__file__).with_name('analyze_userd_mapping.py'), Path(__file__).with_name('analyze_userd_progress.py')]
 manifest = {'gpu_preflight': query, 'command': command, 'timeout_s': 45,
             'CUDA_VISIBLE_DEVICES': uuid, 'LD_PRELOAD': env['LD_PRELOAD'],
             'sha256': {str(f): hashlib.sha256(f.read_bytes()).hexdigest() for f in files}}
@@ -47,10 +49,30 @@ with Path(str(output) + '.launch.json').open('x') as f:
 start = time.monotonic_ns()
 with Path(str(output) + '.stdout').open('x') as out, Path(str(output) + '.stderr').open('x') as err:
     try:
-        result = subprocess.run(command, env=env, stdout=out, stderr=err, timeout=45)
-        code = result.returncode
+        with subprocess.Popen(command, env=env, stdout=out, stderr=err) as child:
+            deadline = time.monotonic() + 45
+            evidence = Path(str(output) + '.userd')
+            try:
+                if a.mode == 'userd-progress':
+                    from analyze_userd_progress import publish_plan
+                    while child.poll() is None and not (evidence / 'ready').exists():
+                        if time.monotonic() >= deadline:
+                            raise subprocess.TimeoutExpired(command, 45)
+                        time.sleep(0.01)
+                    if child.poll() is None:
+                        # Full owner/generation/physical UUID/map gates run before
+                        # the first dereference; child rechecks live sequence.
+                        publish_plan(evidence, child.pid)
+                code = child.wait(timeout=max(0.01, deadline - time.monotonic()))
+            except BaseException:
+                child.kill(); child.wait()
+                raise
     except subprocess.TimeoutExpired:
         code = 124
+    except Exception as error:
+        # Preserve failures, never retry with a weaker gate or a reset.
+        code = 125
+        print('Live validation failed:', error, file=err)
 with Path(str(output) + '.exit.json').open('x') as f:
     json.dump({'exit_code': code, 'elapsed_ns': time.monotonic_ns() - start}, f)
 print('Probe exit:', code)

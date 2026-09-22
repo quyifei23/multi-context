@@ -98,6 +98,7 @@ void usage() {
 Usage: context_ping_pong [options]
   --mode all|standby|takeover|live-handoff|preempt-hold   Default: all (legacy)
          userd-map                 Passive channel/USERD mapping audit; no added RM controls
+         userd-progress            Bounded reads of validated existing USERD GET/PUT
   --long-ms 10,100,1000            Target durations; fixed work calibrated with Events
   --trials N                      Measured trials per case/target (default: 10)
   --warmup N                      Warmup launches (default: 3, minimum: 1)
@@ -177,9 +178,9 @@ Options parse(int argc, char** argv) {
             while (std::getline(input, part, ',')) o.durations.push_back(number(part));
         } else throw std::runtime_error("Unknown option: " + key);
     }
-    if (o.mode != "all" && o.mode != "standby" && o.mode != "takeover" && o.mode != "live-handoff" && o.mode != "preempt-hold" && o.mode != "userd-map")
+    if (o.mode != "all" && o.mode != "standby" && o.mode != "takeover" && o.mode != "live-handoff" && o.mode != "preempt-hold" && o.mode != "userd-map" && o.mode != "userd-progress")
         throw std::runtime_error("Unknown --mode");
-    if (o.mode == "userd-map") {
+    if (o.mode == "userd-map" || o.mode == "userd-progress") {
 #ifndef BENCH_HAS_USERD_OBSERVER
         throw std::runtime_error("Rebuild with BENCH_NVIDIA_SOURCE and the existing RM bridge for userd-map");
 #endif
@@ -447,27 +448,51 @@ public:
     }
     CUresult query_done() { return cuEventQuery(end_); }
     void wait_done() { synchronize_event(end_); }
-    void run_tiny(Sample& s, std::atomic<bool>* completed = nullptr) {
+    using TinyObservation = std::function<void(const char*, Ns, Ns, CUresult)>;
+    void run_tiny(Sample& s, std::atomic<bool>* completed = nullptr, const TinyObservation& observe = {}) {
+        auto call = [&](const char* label, auto fn) {
+            const Ns begin = observe ? now_ns() : 0;
+            const CUresult result = fn();
+            const Ns end = observe ? now_ns() : 0;
+            if (observe) observe(label, begin, end, result);
+            CU(result);
+        };
         unsigned token = ++token_;
         void* args[] = {&tiny_output_, &token};
         s.cpu_b = sched_getcpu();
-        CU(cuEventRecord(begin_, stream_));
+        call("after_begin_event", [&] { return cuEventRecord(begin_, stream_); });
+        if (observe) observe("before_launch", 0, 0, CUDA_SUCCESS);
         s.b_launch_seq = ++launch_sequence_;
         s.b_launch = now_ns();
         CUresult result = cuLaunchKernel(tiny_, 1, 1, 1, 1, 1, 1, 0, stream_, args, nullptr);
         s.b_launch_return = now_ns();
+        if (observe) observe("after_launch", s.b_launch, s.b_launch_return, result);
         CU(result);
-        CU(cuEventRecord(end_, stream_));
-        synchronize_event(end_);
-        s.b_complete = now_ns();
+        call("after_end_event", [&] { return cuEventRecord(end_, stream_); });
+        if (observe) {
+            const Ns deadline = now_ns() + query_timeout_;
+            for (;;) {
+                const Ns begin = now_ns();
+                result = cuEventQuery(end_);
+                const Ns end = now_ns();
+                observe("event_query", begin, end, result);
+                if (result == CUDA_SUCCESS) { s.b_complete = end; break; }
+                if (result != CUDA_ERROR_NOT_READY) CU(result);
+                if (now_ns() >= deadline) throw std::runtime_error("USERD tiny Event deadline");
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        } else {
+            synchronize_event(end_);
+            s.b_complete = now_ns();
+        }
         // Let A query its own Event immediately, before B's elapsed-time query
         // or DtoH copy can add observation delay. No CUDA handle crosses threads.
         if (completed) completed->store(true, std::memory_order_release);
         float ms = 0;
-        CU(cuEventElapsedTime(&ms, begin_, end_));
+        call("after_elapsed_time", [&] { return cuEventElapsedTime(&ms, begin_, end_); });
         s.b_event_ms = ms;
         TinyResult host{};
-        CU(cuMemcpyDtoH(&host, tiny_output_, sizeof(host)));
+        call("after_dtoh", [&] { return cuMemcpyDtoH(&host, tiny_output_, sizeof(host)); });
         if (host.value != (token ^ kTokenMask) || host.end_gpu_ns < host.start_gpu_ns)
             throw std::runtime_error("Invalid B output/timestamps");
         s.b_start_gpu_ns = host.start_gpu_ns;
@@ -712,7 +737,7 @@ void metadata_before_cuda(Output& out, const Options& o, int argc, char** argv) 
 
 void experiments(Options& o, Output& out) {
 #ifdef BENCH_HAS_USERD_OBSERVER
-    if (o.mode == "userd-map") run_userd_mapping(o, out);
+    if (o.mode == "userd-map" || o.mode == "userd-progress") run_userd_mapping(o, out);
 #endif
 #ifdef BENCH_HAS_RM
     // The capture bridge must be configured before the first CUDA call.

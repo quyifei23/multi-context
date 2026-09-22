@@ -1,0 +1,812 @@
+{
+  "classification": "bounded_userd_fields_observed",
+  "source_commit": "db0c4e65c8e34c678d745ddb1317f53f90d1072b",
+  "verified_channels": 8,
+  "same_binding_across_read_window": true,
+  "rounds": 32,
+  "volatile_u32_reads": 1024,
+  "observed_window_ns": 6424481,
+  "project_rm_controls": 0,
+  "extra_gpu_mappings": 0,
+  "rewind_trials": 0,
+  "explicit_context_destroy_calls": 0,
+  "cuda_result_verified": true,
+  "event_query_not_ready": 0,
+  "launch_api_ns": 18409,
+  "complete_observed_rel_ns": 2937387,
+  "event_ms_including_instrumentation_gaps": 2.70438,
+  "kernel_internal_duration_ns": 0,
+  "observer_bridge_matching_ioctl_counts": [
+    1307,
+    1307
+  ],
+  "repeated_value_changes": 0,
+  "channels": [
+    {
+      "channel_ordinal": 0,
+      "gpfifo_entries": 1024,
+      "get_changed": false,
+      "put_changed": false,
+      "values_within_ring": true,
+      "phases": {
+        "idle_before": {
+          "get_observed": [
+            122
+          ],
+          "put_observed": [
+            122
+          ]
+        },
+        "before_begin_event": {
+          "get_observed": [
+            122
+          ],
+          "put_observed": [
+            122
+          ]
+        },
+        "after_begin_event": {
+          "get_observed": [
+            122
+          ],
+          "put_observed": [
+            122
+          ]
+        },
+        "before_launch": {
+          "get_observed": [
+            122
+          ],
+          "put_observed": [
+            122
+          ]
+        },
+        "after_launch": {
+          "get_observed": [
+            122
+          ],
+          "put_observed": [
+            122
+          ]
+        },
+        "launch_no_api": {
+          "get_observed": [
+            122
+          ],
+          "put_observed": [
+            122
+          ]
+        },
+        "after_end_event": {
+          "get_observed": [
+            122
+          ],
+          "put_observed": [
+            122
+          ]
+        },
+        "event_query": {
+          "get_observed": [
+            122
+          ],
+          "put_observed": [
+            122
+          ]
+        },
+        "after_elapsed_time": {
+          "get_observed": [
+            122
+          ],
+          "put_observed": [
+            122
+          ]
+        },
+        "after_dtoh": {
+          "get_observed": [
+            122
+          ],
+          "put_observed": [
+            122
+          ]
+        },
+        "idle_after": {
+          "get_observed": [
+            122
+          ],
+          "put_observed": [
+            122
+          ]
+        }
+      }
+    },
+    {
+      "channel_ordinal": 1,
+      "gpfifo_entries": 1024,
+      "get_changed": true,
+      "put_changed": true,
+      "values_within_ring": true,
+      "phases": {
+        "idle_before": {
+          "get_observed": [
+            4
+          ],
+          "put_observed": [
+            4
+          ]
+        },
+        "before_begin_event": {
+          "get_observed": [
+            4
+          ],
+          "put_observed": [
+            4
+          ]
+        },
+        "after_begin_event": {
+          "get_observed": [
+            4
+          ],
+          "put_observed": [
+            5
+          ]
+        },
+        "before_launch": {
+          "get_observed": [
+            4
+          ],
+          "put_observed": [
+            5
+          ]
+        },
+        "after_launch": {
+          "get_observed": [
+            5
+          ],
+          "put_observed": [
+            6
+          ]
+        },
+        "launch_no_api": {
+          "get_observed": [
+            5,
+            6
+          ],
+          "put_observed": [
+            6
+          ]
+        },
+        "after_end_event": {
+          "get_observed": [
+            7
+          ],
+          "put_observed": [
+            7
+          ]
+        },
+        "event_query": {
+          "get_observed": [
+            7
+          ],
+          "put_observed": [
+            7
+          ]
+        },
+        "after_elapsed_time": {
+          "get_observed": [
+            7
+          ],
+          "put_observed": [
+            7
+          ]
+        },
+        "after_dtoh": {
+          "get_observed": [
+            7
+          ],
+          "put_observed": [
+            7
+          ]
+        },
+        "idle_after": {
+          "get_observed": [
+            7
+          ],
+          "put_observed": [
+            7
+          ]
+        }
+      }
+    },
+    {
+      "channel_ordinal": 2,
+      "gpfifo_entries": 1024,
+      "get_changed": false,
+      "put_changed": false,
+      "values_within_ring": true,
+      "phases": {
+        "idle_before": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "before_begin_event": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "after_begin_event": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "before_launch": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "after_launch": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "launch_no_api": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "after_end_event": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "event_query": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "after_elapsed_time": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "after_dtoh": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "idle_after": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        }
+      }
+    },
+    {
+      "channel_ordinal": 3,
+      "gpfifo_entries": 1024,
+      "get_changed": false,
+      "put_changed": false,
+      "values_within_ring": true,
+      "phases": {
+        "idle_before": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "before_begin_event": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "after_begin_event": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "before_launch": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "after_launch": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "launch_no_api": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "after_end_event": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "event_query": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "after_elapsed_time": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "after_dtoh": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "idle_after": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        }
+      }
+    },
+    {
+      "channel_ordinal": 4,
+      "gpfifo_entries": 1024,
+      "get_changed": false,
+      "put_changed": false,
+      "values_within_ring": true,
+      "phases": {
+        "idle_before": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "before_begin_event": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "after_begin_event": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "before_launch": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "after_launch": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "launch_no_api": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "after_end_event": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "event_query": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "after_elapsed_time": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "after_dtoh": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "idle_after": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        }
+      }
+    },
+    {
+      "channel_ordinal": 5,
+      "gpfifo_entries": 1024,
+      "get_changed": false,
+      "put_changed": false,
+      "values_within_ring": true,
+      "phases": {
+        "idle_before": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "before_begin_event": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "after_begin_event": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "before_launch": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "after_launch": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "launch_no_api": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "after_end_event": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "event_query": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "after_elapsed_time": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "after_dtoh": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "idle_after": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        }
+      }
+    },
+    {
+      "channel_ordinal": 6,
+      "gpfifo_entries": 1024,
+      "get_changed": false,
+      "put_changed": false,
+      "values_within_ring": true,
+      "phases": {
+        "idle_before": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "before_begin_event": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "after_begin_event": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "before_launch": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "after_launch": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "launch_no_api": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "after_end_event": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "event_query": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "after_elapsed_time": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "after_dtoh": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "idle_after": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        }
+      }
+    },
+    {
+      "channel_ordinal": 7,
+      "gpfifo_entries": 1024,
+      "get_changed": false,
+      "put_changed": false,
+      "values_within_ring": true,
+      "phases": {
+        "idle_before": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "before_begin_event": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "after_begin_event": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "before_launch": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "after_launch": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "launch_no_api": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "after_end_event": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "event_query": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "after_elapsed_time": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "after_dtoh": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        },
+        "idle_after": {
+          "get_observed": [
+            1
+          ],
+          "put_observed": [
+            1
+          ]
+        }
+      }
+    }
+  ],
+  "sentinel_entry_mapping_established": false,
+  "hardware_consumption_semantics_verified": false,
+  "limits": [
+    "USERD reads are sequential, not atomic across fields or channels",
+    "LFENCE orders CPU reads; it does not establish GPU freshness or RAMFC equivalence",
+    "No ring contents decoded, no per-launch entry count or sentinel mapping established",
+    "Instrumentation deliberately inserts host gaps; not a latency benchmark",
+    "Lifecycle coverage is limited to interposed libc calls plus idle live VMA checks"
+  ]
+}

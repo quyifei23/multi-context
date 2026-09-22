@@ -1,7 +1,11 @@
 # CUDA Driver API 双 Context 接管 microbenchmark
 
+后续 [USERD GET/PUT 最小采样实验](USERD_PROGRESS_EXPERIMENT.md)：一次 smoke 中，隔离 tiny launch 后
+一个 channel 的 PUT 从 5 到 6，GET 在无 CUDA API 窗口内追上；新增 RM control 为 0。
+已验证字段可读且变化，尚未建立 sentinel→entry 映射或硬件消费时刻语义。
+
 后续 [USERD 最小映射实验](USERD_MAPPING_EXPERIMENT.md)：两次 smoke 均验证 A compute TSG 的 8/8 个 channel
-可关联到既有 CPU 映射；新增 RM control 为 0。尚未读取 GET/PUT 或建立 sentinel→entry 映射。
+可关联到既有 CPU 映射；新增 RM control 为 0。该阶段只验证 mapping，未读取内容。
 
 后续 [GP_PUT rewind 实验](REWIND_EXPERIMENT.md)：false/true smoke 与 5 对 matched trials 共 12/12 均为
 `old_queue_preserved`。stock rewind 被接受，但本提交布局的 old sentinel 仍执行；Context 新 stream 可用。

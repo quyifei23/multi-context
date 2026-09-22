@@ -173,12 +173,18 @@ def snapshot(directory, label, rows):
     return identity, bindings, len(gids), len(original)
 
 
-def analyze(directory):
+def read_observations(directory):
     rows = [json.loads(x) for x in (directory / 'observations.jsonl').read_text().splitlines()]
     require(rows and rows[0]['kind'] == 'start' and rows[0]['bridge_hook_next'], 'observer_not_initialized')
     require([r['seq'] for r in rows] == list(range(1, len(rows) + 1)), 'lost_observation')
     require(not any(r['kind'].startswith('unknown') or r.get('label') == 'failed' for r in rows), 'capture_failed')
     require(all(r['end_ns'] >= r['begin_ns'] for r in rows), 'invalid_clock_boundaries')
+    return rows
+
+
+def analyze(directory):
+    rows = read_observations(directory)
+    require(not any(r['kind'] == 'userd_sample' for r in rows), 'use_progress_analyzer_for_memory_reads')
     a, first, gid_a, num_a = snapshot(directory, 'after_warmup', rows)
     b, second, gid_b, num_b = snapshot(directory, 'after_tiny', rows)
     require(a == b and first == second, 'binding_or_mapping_changed_across_snapshots')

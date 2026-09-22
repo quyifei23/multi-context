@@ -22,23 +22,29 @@
 #include <sys/syscall.h>
 #include <time.h>
 #include <unistd.h>
+#include <vector>
 #if !defined(__linux__) || !defined(__x86_64__)
 #error "The passive forwarding ABI was reviewed only for Linux x86_64"
 #endif
 
-// The only device calls here forward calls already made by libcuda. No private
-// memory dereference: only pinned, successful, known RM argument structures.
+// Device requests only forward calls already made by libcuda. The optional
+// reader below loads USERD fields only after a live owned mapping audit.
 static_assert(sizeof(nv_ioctl_nvos33_parameters_with_fd) == 56);
 static_assert(sizeof(nv_ioctl_nvos02_parameters_with_fd) == 56);
 static_assert(offsetof(Nvc56fControl, GPGet) == 0x88);
 static_assert(offsetof(Nvc56fControl, GPPut) == 0x8c);
+static_assert(sizeof(Nvc56fControl) == 512);
 namespace {
 using Ioctl = int(*)(int, unsigned long, ...);
 Ioctl next_ioctl = nullptr;
 std::atomic<bool> recording{false};
 thread_local bool inside = false;
 struct Guard { Guard() { inside = true; } ~Guard() { inside = false; } };
-struct State { std::recursive_mutex mutex; int log = -1; pid_t owner = 0; uint64_t seq = 0; bool failed = false; };
+struct State {
+    std::recursive_mutex mutex; int log = -1; pid_t owner = 0; uint64_t seq = 0; bool failed = false;
+    bool reads_armed = false; unsigned rounds = 0; uint64_t read_deadline = 0;
+    std::vector<uint64_t> userd_addresses;
+};
 State& state() { static auto* s = new State; return *s; }
 uint64_t ns() { timespec ts{}; clock_gettime(CLOCK_MONOTONIC_RAW, &ts); return uint64_t(ts.tv_sec) * 1000000000 + ts.tv_nsec; }
 uint64_t address(const void* p) { return reinterpret_cast<uintptr_t>(p); }
@@ -68,6 +74,9 @@ std::string fd_fields(const Fd& f, const char* prefix = "") {
 }
 uint64_t emit(const char* kind, uint64_t begin, uint64_t end, const std::string& fields) {
     auto& s = state();
+    // During the short read window any captured syscall, even an unrelated one,
+    // invalidates the live audit. Do not guess which topology changes are safe.
+    if (s.reads_armed && strcmp(kind, "userd_sample") && strcmp(kind, "mark")) s.failed = true;
     if (s.owner != getpid() || s.log < 0 || s.seq >= 20000) { s.failed = true; return 0; }
     std::ostringstream row;
     row << "{\"seq\":" << ++s.seq << ",\"pid\":" << s.owner << ",\"tid\":" << syscall(SYS_gettid)
@@ -186,6 +195,52 @@ extern "C" uint64_t userd_observer_mark(const char* label) {
     return emit("mark", now, now, ",\"label\":\"" + std::string(label) + "\"");
 }
 extern "C" int userd_observer_ok() { auto& s = state(); std::lock_guard<std::recursive_mutex> lock(s.mutex); return recording && !s.failed && s.owner == getpid(); }
+extern "C" int userd_observer_arm_reads(uint64_t sequence, const uint64_t* addresses, unsigned count) {
+    if (!recording || inside || !addresses || !count || count > 32) return 0;
+    Guard guard; auto& s = state(); std::lock_guard<std::recursive_mutex> lock(s.mutex);
+    if (s.failed || s.reads_armed || s.owner != getpid() || s.seq != sequence) return 0;
+    for (unsigned i = 0; i < count; ++i) {
+        if (!addresses[i] || addresses[i] % 512) return 0;
+        for (unsigned j = 0; j < i; ++j) if (addresses[i] == addresses[j]) return 0;
+    }
+    s.userd_addresses.assign(addresses, addresses + count);
+    s.read_deadline = ns() + 3000000000ULL; s.reads_armed = true;
+    return 1;
+}
+extern "C" int userd_observer_sample(const char* label, uint64_t api_begin, uint64_t api_end, int result) {
+    if (!recording || inside || !label || strspn(label, "abcdefghijklmnopqrstuvwxyz_") != strlen(label)) return 0;
+    Guard guard; auto& s = state(); std::lock_guard<std::recursive_mutex> lock(s.mutex);
+    if (s.failed || !s.reads_armed || s.owner != getpid() || s.rounds >= 256 || ns() >= s.read_deadline) {
+        s.failed = true; return 0;
+    }
+    const auto begin = ns(); std::ostringstream fields;
+    fields << ",\"label\":\"" << label << "\",\"round\":" << s.rounds++
+           << ",\"api_begin_ns\":" << api_begin << ",\"api_end_ns\":" << api_end
+           << ",\"api_result\":" << result << ",\"channels\":[";
+    for (unsigned i = 0; i < s.userd_addresses.size(); ++i) {
+        // Four aligned volatile 32-bit loads. LFENCE orders the CPU loads and
+        // their time brackets; it neither flushes GPU state nor makes a pair atomic.
+        auto* p = reinterpret_cast<const Nvc56fControl*>(s.userd_addresses[i]);
+        const auto t0 = ns();
+        asm volatile("lfence" ::: "memory"); const uint32_t get0 = p->GPGet;
+        asm volatile("lfence" ::: "memory"); const uint32_t put0 = p->GPPut;
+        asm volatile("lfence" ::: "memory"); const uint32_t get1 = p->GPGet;
+        asm volatile("lfence" ::: "memory"); const uint32_t put1 = p->GPPut;
+        asm volatile("lfence" ::: "memory"); const auto t1 = ns();
+        if (i) fields << ',';
+        fields << "{\"ordinal\":" << i << ",\"begin_ns\":" << t0 << ",\"end_ns\":" << t1
+               << ",\"get_first\":" << get0 << ",\"put_first\":" << put0
+               << ",\"get_second\":" << get1 << ",\"put_second\":" << put1 << '}';
+    }
+    fields << ']';
+    return emit("userd_sample", begin, ns(), fields.str()) ? 1 : 0;
+}
+extern "C" int userd_observer_finish_reads() {
+    Guard guard; auto& s = state(); std::lock_guard<std::recursive_mutex> lock(s.mutex);
+    if (!s.reads_armed || s.failed || s.owner != getpid()) return 0;
+    s.reads_armed = false; const auto now = ns();
+    return emit("mark", now, now, ",\"label\":\"reads_finished\"") ? static_cast<int>(s.rounds) : 0;
+}
 extern "C" int ioctl(int fd, unsigned long request, ...) noexcept {
     va_list args; va_start(args, request); void* arg = va_arg(args, void*); va_end(args);
     if (!next_ioctl) next_ioctl = reinterpret_cast<Ioctl>(dlsym(RTLD_NEXT, "ioctl"));

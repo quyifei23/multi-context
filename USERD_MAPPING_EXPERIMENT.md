@@ -2,6 +2,8 @@
 
 2026-09-22。**结果：`already_mapped_state_available`，范围仅为 USERD binding。**
 
+后续的 [USERD_PROGRESS_EXPERIMENT.md](USERD_PROGRESS_EXPERIMENT.md)已完成一次有界字段读取；下文保留 mapping 阶段的证据边界。
+
 两次独立进程 smoke 均把 A compute TSG 的 **8/8 个 channel** 无歧义关联到 libcuda
 已经建立的可读 CPU 映射；每次在 A/B 预热后、A 再完成一次 tiny kernel 后核对，身份和映射不变。
 观测器没有额外发出 RM control 或 mapping 请求；USERD 内容访问与 rewind trial 均为 0。

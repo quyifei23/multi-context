@@ -51,8 +51,8 @@ if(BENCH_INTERCEPTION_SOURCE OR BENCH_RM_LIBRARY)
   add_dependencies(context_ping_pong epoch_sentinel)
   target_compile_definitions(context_ping_pong PRIVATE BENCH_SENTINEL_CUBIN_PATH="${BENCH_SENTINEL_CUBIN}")
 endif()
-# Opt-in, passive libc observation only. This target never constructs an RM
-# request or requests an extra mapping; it records normal libcuda calls.
+# Opt-in libc observation, plus bounded reads of validated existing USERD.
+# This target never constructs an RM request or requests an extra mapping.
 set(BENCH_NVIDIA_SOURCE "" CACHE PATH "Unmodified NVIDIA 595.58.03 source for USERD mapping audit")
 if(BENCH_NVIDIA_SOURCE)
   if(NOT BENCH_INTERCEPTION_SOURCE OR NOT BENCH_RM_LIBRARY)

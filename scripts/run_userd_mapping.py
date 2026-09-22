@@ -12,8 +12,14 @@ p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--build', type=Path, default=Path('build-userd'))
 p.add_argument('--gpu', type=int, default=0)
 p.add_argument('--output', type=Path, required=True)
-p.add_argument('--mode', choices=('userd-map', 'userd-progress'), default='userd-map')
+p.add_argument('--mode', choices=('userd-map', 'userd-progress', 'gpfifo-entry'), default='userd-map')
+p.add_argument('--gpfifo-metadata', action='store_true', help='Passively retain existing UVM mappings; no new request')
+p.add_argument('--entry-wrap', action='store_true', help='Use normal tiny launches to prepare a ring-boundary pair')
 a = p.parse_args()
+if a.mode == 'gpfifo-entry':
+    a.gpfifo_metadata = True
+if a.entry_wrap and a.mode != 'gpfifo-entry':
+    raise SystemExit('--entry-wrap requires --mode gpfifo-entry')
 build, output = a.build.resolve(), a.output.resolve()
 output.parent.mkdir(parents=True, exist_ok=True)
 if output.exists() or Path(str(output) + '.userd').exists():
@@ -32,8 +38,11 @@ if os.environ.get('LD_PRELOAD'):
 env = os.environ.copy()
 env['CUDA_VISIBLE_DEVICES'] = uuid
 env['LD_PRELOAD'] = str(build / 'libuserd_observer.so')
+env['BENCH_GPFIFO_METADATA'] = '1' if a.gpfifo_metadata else '0'
 command = [str(build / 'context_ping_pong'), '--mode', a.mode, '--cpu-a', '0', '--cpu-b', '1',
            '--cpu-control', '2', '--query-timeout-ms', '3000', '--output', str(output)]
+if a.entry_wrap:
+    command.append('--entry-wrap')
 # Cache paths are retained locally for exact reproducibility; never copied into
 # the deidentified public outputs.
 cache = dict(line.split('=', 1) for line in (build / 'CMakeCache.txt').read_text().splitlines()
@@ -41,8 +50,10 @@ cache = dict(line.split('=', 1) for line in (build / 'CMakeCache.txt').read_text
 bridge = Path(cache['BENCH_RM_LIBRARY:FILEPATH'])
 files = [build / 'context_ping_pong', build / 'libuserd_observer.so', build / 'kernels.cubin', bridge,
          Path(__file__), Path(__file__).with_name('analyze_userd_mapping.py'), Path(__file__).with_name('analyze_userd_progress.py')]
+if a.mode == 'gpfifo-entry':
+    files += [Path(__file__).with_name('gpfifo_binding.py'), Path(__file__).with_name('analyze_gpfifo_entry.py')]
 manifest = {'gpu_preflight': query, 'command': command, 'timeout_s': 45,
-            'CUDA_VISIBLE_DEVICES': uuid, 'LD_PRELOAD': env['LD_PRELOAD'],
+            'CUDA_VISIBLE_DEVICES': uuid, 'LD_PRELOAD': env['LD_PRELOAD'], 'gpfifo_metadata': a.gpfifo_metadata,
             'sha256': {str(f): hashlib.sha256(f.read_bytes()).hexdigest() for f in files}}
 with Path(str(output) + '.launch.json').open('x') as f:
     json.dump(manifest, f, indent=2); f.write('\n')
@@ -53,7 +64,7 @@ with Path(str(output) + '.stdout').open('x') as out, Path(str(output) + '.stderr
             deadline = time.monotonic() + 45
             evidence = Path(str(output) + '.userd')
             try:
-                if a.mode == 'userd-progress':
+                if a.mode in ('userd-progress', 'gpfifo-entry'):
                     from analyze_userd_progress import publish_plan
                     while child.poll() is None and not (evidence / 'ready').exists():
                         if time.monotonic() >= deadline:
@@ -63,6 +74,14 @@ with Path(str(output) + '.stdout').open('x') as out, Path(str(output) + '.stderr
                         # Full owner/generation/physical UUID/map gates run before
                         # the first dereference; child rechecks live sequence.
                         publish_plan(evidence, child.pid)
+                if a.mode == 'gpfifo-entry':
+                    from analyze_gpfifo_entry import publish_ring_plan
+                    while child.poll() is None and not (evidence / 'ring_ready').exists():
+                        if time.monotonic() >= deadline:
+                            raise subprocess.TimeoutExpired(command, 45)
+                        time.sleep(0.01)
+                    if child.poll() is None:
+                        publish_ring_plan(evidence, child.pid)
                 code = child.wait(timeout=max(0.01, deadline - time.monotonic()))
             except BaseException:
                 child.kill(); child.wait()

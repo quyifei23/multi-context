@@ -90,6 +90,7 @@ struct Options {
     std::string rm_case = "all";
     double hold_ms = 1200;
     bool rm_probe = false, trace_marks = false;
+    bool entry_wrap = false;
     double query_timeout_ms = 3000;
 };
 
@@ -99,6 +100,8 @@ Usage: context_ping_pong [options]
   --mode all|standby|takeover|live-handoff|preempt-hold   Default: all (legacy)
          userd-map                 Passive channel/USERD mapping audit; no added RM controls
          userd-progress            Bounded reads of validated existing USERD GET/PUT
+         gpfifo-entry              Bind two isolated launches to existing ring slots
+  --entry-wrap                    Prepare the gpfifo-entry pair at the ring boundary
   --long-ms 10,100,1000            Target durations; fixed work calibrated with Events
   --trials N                      Measured trials per case/target (default: 10)
   --warmup N                      Warmup launches (default: 3, minimum: 1)
@@ -148,6 +151,7 @@ Options parse(int argc, char** argv) {
         if (key == "--estimate-start") { o.estimate_start = true; continue; }
         if (key == "--rm-probe") { o.rm_probe = true; continue; }
         if (key == "--trace-marks") { o.trace_marks = true; continue; }
+        if (key == "--entry-wrap") { o.entry_wrap = true; continue; }
         if (i + 1 == argc) throw std::runtime_error("Missing value for " + key);
         const std::string value = argv[++i];
         if (key == "--mode") o.mode = value;
@@ -178,9 +182,9 @@ Options parse(int argc, char** argv) {
             while (std::getline(input, part, ',')) o.durations.push_back(number(part));
         } else throw std::runtime_error("Unknown option: " + key);
     }
-    if (o.mode != "all" && o.mode != "standby" && o.mode != "takeover" && o.mode != "live-handoff" && o.mode != "preempt-hold" && o.mode != "userd-map" && o.mode != "userd-progress")
+    if (o.mode != "all" && o.mode != "standby" && o.mode != "takeover" && o.mode != "live-handoff" && o.mode != "preempt-hold" && o.mode != "userd-map" && o.mode != "userd-progress" && o.mode != "gpfifo-entry")
         throw std::runtime_error("Unknown --mode");
-    if (o.mode == "userd-map" || o.mode == "userd-progress") {
+    if (o.mode == "userd-map" || o.mode == "userd-progress" || o.mode == "gpfifo-entry") {
 #ifndef BENCH_HAS_USERD_OBSERVER
         throw std::runtime_error("Rebuild with BENCH_NVIDIA_SOURCE and the existing RM bridge for userd-map");
 #endif
@@ -206,6 +210,7 @@ Options parse(int argc, char** argv) {
         throw std::runtime_error("RM options require --mode preempt-hold");
     }
     if (o.mode == "live-handoff") o.estimate_start = true;
+    if (o.entry_wrap && o.mode != "gpfifo-entry") throw std::runtime_error("entry-wrap requires gpfifo-entry");
     if (o.action != "destroy" && o.action != "wait-then-destroy" && o.action != "both")
         throw std::runtime_error("--action must be destroy, wait-then-destroy, or both");
     if (o.trials < 1 || o.warmup < 1 || o.threads < 32 || o.threads > 1024 || o.threads % 32)
@@ -448,6 +453,24 @@ public:
     }
     CUresult query_done() { return cuEventQuery(end_); }
     void wait_done() { synchronize_event(end_); }
+#ifdef BENCH_HAS_USERD_OBSERVER
+    // Entry attribution interval contains exactly one Driver launch per call.
+    // No Events, copies, synchronization or other CUDA API inside this method.
+    CUresult launch_tiny_only(Sample& s) {
+        unsigned token = ++token_;
+        void* args[] = {&tiny_output_, &token};
+        s.b_launch_seq = ++launch_sequence_; s.b_launch = now_ns();
+        const CUresult result = cuLaunchKernel(tiny_, 1, 1, 1, 1, 1, 1, 0, stream_, args, nullptr);
+        s.b_launch_return = now_ns(); return result;
+    }
+    void verify_last_tiny() {
+        // Only after both measured launches and all ring snapshots finish.
+        CU(cuEventRecord(end_, stream_)); synchronize_event(end_);
+        TinyResult result{}; CU(cuMemcpyDtoH(&result, tiny_output_, sizeof(result)));
+        if (result.value != (token_ ^ kTokenMask) || result.end_gpu_ns < result.start_gpu_ns)
+            throw std::runtime_error("Invalid last isolated tiny result");
+    }
+#endif
     using TinyObservation = std::function<void(const char*, Ns, Ns, CUresult)>;
     void run_tiny(Sample& s, std::atomic<bool>* completed = nullptr, const TinyObservation& observe = {}) {
         auto call = [&](const char* label, auto fn) {
@@ -737,7 +760,7 @@ void metadata_before_cuda(Output& out, const Options& o, int argc, char** argv) 
 
 void experiments(Options& o, Output& out) {
 #ifdef BENCH_HAS_USERD_OBSERVER
-    if (o.mode == "userd-map" || o.mode == "userd-progress") run_userd_mapping(o, out);
+    if (o.mode == "userd-map" || o.mode == "userd-progress" || o.mode == "gpfifo-entry") run_userd_mapping(o, out);
 #endif
 #ifdef BENCH_HAS_RM
     // The capture bridge must be configured before the first CUDA call.

@@ -9,6 +9,9 @@
 再后续：[有界 GET/PUT 采样](USERD_PROGRESS_EXPERIMENT.md)已在新进程内观察到 USERD 字段随原 tiny 提交推进。
 这是字段可观测性的实验结果；sentinel→entry 映射、USERD 的精确消费语义及其与 RAMFC 的关系仍未验证。
 
+最新：[隔离 launch → exact entry](GPFIFO_ENTRY_EXPERIMENT.md)已在两次独立进程验证连续 slot 及实际 wrap，
+补上本次 tiny launch 的 entry binding。下文仍为 Phase A 的历史审计；完整 epoch 覆盖及硬件消费/预取语义尚未闭合。
+
 **当前可验证、可供本 benchmark 使用的接口不足以判断某个 CUDA epoch 是否仍在可 rewind 的未消费区间。**
 公开源码存在 USERD GET/PUT 布局、按 owner memory object 建立 CPU 映射的路径，以及返回 context buffer 的 RM 查询候选；
 但尚未把它们连成“本次 A channel → 有效 progress 读数 → old sentinel entry”的证据链。

@@ -1,0 +1,31 @@
+{
+  "classification": "isolated_launch_to_exact_entry_observed",
+  "source_commit": "db0c4e65c8e34c678d745ddb1317f53f90d1072b",
+  "measured_launches": 2,
+  "active_channel_ordinal": 1,
+  "channels_checked": 8,
+  "ring_entries": 1024,
+  "mapped_slots": [
+    1023,
+    0
+  ],
+  "same_owner_generation_mapping": true,
+  "existing_ring_cpu_mapping_verified": true,
+  "gpu_va_memory_cpu_binding_verified": true,
+  "preparation_launches": 1016,
+  "ring_snapshots": 8,
+  "ring_u64_loads": 16384,
+  "project_rm_controls": 0,
+  "extra_gpu_mappings": 0,
+  "rewind_trials": 0,
+  "physical_wrap_observed": true,
+  "no_event_or_copy_between_measured_launches": true,
+  "last_tiny_result_verified": true,
+  "payload_semantics_decoded": false,
+  "limits": [
+    "Binding is for these isolated Driver launches, not arbitrary multi-operation epochs",
+    "Sequential repeated reads are not atomic hardware snapshots",
+    "GET does not establish kernel completion, lack of prefetch or rewind safety",
+    "Only the captured libc paths and this client-created context-share/shared Memory layout are supported"
+  ]
+}

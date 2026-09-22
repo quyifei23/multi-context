@@ -1,0 +1,73 @@
+{
+  "environment": {
+    "gpu_model": "NVIDIA A100-PCIE-40GB",
+    "compute_capability": "8.0",
+    "driver_package": "595.58.03",
+    "cuda_driver_api": 13020,
+    "cuda_toolkit": "12.8.61",
+    "mig": "Disabled",
+    "compute_mode": "Default"
+  },
+  "successful_independent_processes": 2,
+  "measured_isolated_launches": 4,
+  "distinct_live_owner_pids_verified": true,
+  "project_rm_controls": 0,
+  "extra_gpu_mappings": 0,
+  "rewind_trials": 0,
+  "attempts": [
+    {
+      "attempt": "mapping_audit",
+      "exit_code": 0,
+      "ring_snapshots": 0,
+      "counted_as_successful_entry_smoke": false,
+      "outcome": "passive_mapping_audit_only"
+    },
+    {
+      "attempt": "smoke_01",
+      "exit_code": 125,
+      "ring_snapshots": 0,
+      "counted_as_successful_entry_smoke": false,
+      "outcome": "ring_plan_rejected_before_reads",
+      "reason": "uvm_mm_lifetime_binding_missing",
+      "actual_mm_status": 65542,
+      "resolution": "Pinned source permits secondary MM fd release for NV_WARN_NOTHING_TO_DO; other errors still rejected"
+    },
+    {
+      "attempt": "smoke_02",
+      "exit_code": 0,
+      "ring_snapshots": 7,
+      "counted_as_successful_entry_smoke": true,
+      "outcome": "isolated_launch_to_exact_entry_observed",
+      "measured_launches": 2,
+      "mapped_slots": [
+        7,
+        8
+      ],
+      "preparation_launches": 0,
+      "ring_read_window_ns": 26270469,
+      "matched_rm_envelopes_before": 1307,
+      "matched_rm_envelopes_after": 1307,
+      "normal_uvm_requests_observed": 178,
+      "no_api_get_transition_observed": false
+    },
+    {
+      "attempt": "smoke_03_wrap",
+      "exit_code": 0,
+      "ring_snapshots": 8,
+      "counted_as_successful_entry_smoke": true,
+      "outcome": "isolated_launch_to_exact_entry_observed",
+      "measured_launches": 2,
+      "mapped_slots": [
+        1023,
+        0
+      ],
+      "preparation_launches": 1016,
+      "ring_read_window_ns": 36175602,
+      "matched_rm_envelopes_before": 1307,
+      "matched_rm_envelopes_after": 1307,
+      "normal_uvm_requests_observed": 178,
+      "no_api_get_transition_observed": false
+    }
+  ],
+  "scope": "Exact entry binding for measured isolated tiny launches; complete application epoch coverage and hardware consumption semantics unproven"
+}

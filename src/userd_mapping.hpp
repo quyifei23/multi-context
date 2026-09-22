@@ -4,10 +4,11 @@
 
 // Reuse the original owner threads, kernels and bridge lifecycle discovery.
 // Snapshots are idle. Optional progress reads surround one original tiny launch.
-// Neither mode performs rewind or establishes a sentinel/entry mapping.
+// gpfifo-entry adds isolated launch/slot attribution; no mode here performs rewind.
 [[noreturn]] void run_userd_mapping(const Options& o, Output& out) {
     const auto directory = std::filesystem::path(o.output + ".userd");
-    const bool progress = o.mode == "userd-progress";
+    const bool entry_probe = o.mode == "gpfifo-entry";
+    const bool progress = o.mode == "userd-progress" || entry_probe;
     try {
         if (o.device != 0) throw std::runtime_error("userd-map requires visible device 0");
         const char* visible = std::getenv("CUDA_VISIBLE_DEVICES");
@@ -161,9 +162,79 @@
         const auto second = snapshot("after_tiny");
         if (first != second || context_a != after_a || context_b != after_b || context_a == context_b)
             throw std::runtime_error("Context or RM identity changed across snapshots");
+        if (entry_probe) {
+            write("ring_ready.tmp", std::to_string(getpid()) + " " + std::to_string(snapshot_seq));
+            std::filesystem::rename(directory / "ring_ready.tmp", directory / "ring_ready");
+            const Ns deadline = now_ns() + 5000000000LL;
+            while (!std::filesystem::exists(directory / "ring.plan")) {
+                if (now_ns() >= deadline) throw std::runtime_error("No validated existing ring mapping; stopped without ring reads");
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            const auto current = ap::inspect_owned_tsg_for_gpu(compact);
+            if (current.json() != second) throw std::runtime_error("Identity changed before ring read validation");
+            const auto& group = current.binding();
+            std::ifstream plan(directory / "ring.plan");
+            std::string magic; uint64_t owner = 0, sequence = 0, registry = 0, ordinal = 0, handle = 0, generation = 0, ring = 0, entries = 0, initial_put = 0;
+            plan >> magic >> owner >> sequence >> registry >> ordinal >> handle >> generation >> ring >> entries >> initial_put;
+            if (!plan || magic != "GPFIFO_READ_PLAN_V2" || owner != static_cast<uint64_t>(getpid()) ||
+                sequence != snapshot_seq || registry != group.registry_instance || ordinal >= group.members.size() ||
+                group.members[ordinal].channel.token.handle != handle || group.members[ordinal].channel.token.generation != generation ||
+                !ring || ring % 8 || !entries || entries > 4096 || (entries & (entries - 1)) || initial_put >= entries)
+                throw std::runtime_error("Ring plan owner/generation/layout mismatch");
+            std::string extra;
+            if (plan >> extra) throw std::runtime_error("Trailing ring plan fields");
+            const auto final_a = a->submit([&](GpuState& g) {
+                if (g.context_address() != context_a ||
+                    !userd_observer_arm_ring(snapshot_seq, addresses.data(), addresses.size(), ring, entries))
+                    throw std::runtime_error("Ring read audit became stale");
+                auto read_ring = [&](const char* label, unsigned index, Ns begin = 0, Ns end = 0, int result = -1) {
+                    if (!userd_observer_ring_sample(label, index, begin, end, result))
+                        throw std::runtime_error("Bounded ring read stopped");
+                };
+                const unsigned preparation = o.entry_wrap ? (entries - 1 - initial_put) : 0;
+                if (o.entry_wrap) {
+                    read_ring("before_fill", 0);
+                    const Ns fill_deadline = now_ns() + 3000000000LL;
+                    for (unsigned j = 0; j < preparation; ++j) {
+                        Sample sample; CU(g.launch_tiny_only(sample));
+                        if (!userd_observer_ok() || now_ns() >= fill_deadline)
+                            throw std::runtime_error("Wrap preparation invalidated the read audit or exceeded its deadline");
+                    }
+                }
+                std::ostringstream evidence;
+                evidence << "{\"wrap_requested\":" << (o.entry_wrap ? "true" : "false")
+                         << ",\"preparation_launches\":" << preparation << ",\"initial_put\":" << initial_put << ",\"launches\":[";
+                read_ring("idle", 0);
+                for (unsigned index = 1; index <= 2; ++index) {
+                    read_ring("before_launch", index);
+                    Sample sample; const auto result = g.launch_tiny_only(sample);
+                    read_ring("after_launch", index, sample.b_launch, sample.b_launch_return, result);
+                    CU(result);
+                    for (unsigned j = 0; j < 8; ++j) {
+                        if (!userd_observer_sample("entry_no_api", 0, 0, -1)) throw std::runtime_error("Ring progress read stopped");
+                        std::this_thread::sleep_for(std::chrono::microseconds(100));
+                    }
+                    read_ring("after_no_api", index);
+                    if (index > 1) evidence << ',';
+                    evidence << "{\"index\":" << index << ",\"launch_sequence\":" << sample.b_launch_seq
+                             << ",\"begin_ns\":" << sample.b_launch << ",\"end_ns\":" << sample.b_launch_return << ",\"cuda_result\":" << result << '}';
+                }
+                const int rounds = userd_observer_finish_reads();
+                if (!rounds) throw std::runtime_error("Ring read window incomplete");
+                g.verify_last_tiny();
+                evidence << "],\"last_result_verified\":true,\"rounds\":" << rounds << '}';
+                write("entries.json", evidence.str());
+                return g.context_address();
+            }).get();
+            const auto final_b = b->submit([](GpuState& g) { return g.context_address(); }).get();
+            const auto final_identity = snapshot("after_entries");
+            if (final_identity != second || final_a != context_a || final_b != context_b)
+                throw std::runtime_error("Context or mapping identity changed after entry experiment");
+            out.meta("ring_capture_complete", 1);
+        }
         out.meta("context_A_identity", context_a); out.meta("context_B_identity", context_b);
         out.meta("identity_unchanged", 1); out.meta("userd_capture_complete", 1);
-        out.meta("run_status", progress ? "captured_progress_not_yet_analyzed" : "captured_mapping_not_yet_analyzed");
+        out.meta("run_status", entry_probe ? "captured_entries_not_yet_analyzed" : (progress ? "captured_progress_not_yet_analyzed" : "captured_mapping_not_yet_analyzed"));
         std::cerr << "USERD capture complete; analyze " << directory << '\n';
         std::cout.flush(); std::cerr.flush();
         // All submitted work completed. Contexts remain alive through the final

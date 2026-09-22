@@ -72,7 +72,9 @@ if(BENCH_NVIDIA_SOURCE)
   target_include_directories(userd_observer PRIVATE
     "${BENCH_NVIDIA_SOURCE}/src/common/sdk/nvidia/inc"
     "${BENCH_NVIDIA_SOURCE}/src/common/inc"
-    "${BENCH_NVIDIA_SOURCE}/src/nvidia/arch/nvalloc/unix/include")
+    "${BENCH_NVIDIA_SOURCE}/src/nvidia/arch/nvalloc/unix/include"
+    "${BENCH_NVIDIA_SOURCE}/kernel-open/nvidia-uvm"
+    "${BENCH_NVIDIA_SOURCE}/kernel-open/common/inc")
   target_link_libraries(userd_observer PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
 endif()
 if(TARGET userd_observer)

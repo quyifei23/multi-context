@@ -2,6 +2,9 @@
 
 2026-09-22。**一次 smoke 完成：合法既有映射上的 USERD GET/PUT 可读，且随本次提交发生变化。**
 
+后续：[GPFIFO_ENTRY_EXPERIMENT.md](GPFIFO_ENTRY_EXPERIMENT.md)已验证两进程的隔离 launch → 唯一 slot，
+包含实际 ring wrap；下文保留 GET/PUT 采样阶段的证据边界。
+
 A compute TSG 的 8 个 channel 中，仅 ordinal 1 的字段变化：idle `(4,4)` → begin Event 后 `(4,5)`
 → tiny launch 返回后 `(5,6)` → 无 CUDA API 窗口中 `(6,6)` → end Event 后 `(7,7)`。
 另外 7 个 channel 保持不变。ordinal 是本进程已验证成员列表的展示编号，不是跨进程 channel ID。

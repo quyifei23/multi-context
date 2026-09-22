@@ -5,13 +5,16 @@
 #include <nv-unix-nvos-params-wrappers.h>
 #include <nv_escape.h>
 #include <nvos.h>
+#include <uvm_linux_ioctl.h>
 #include <atomic>
 #include <cerrno>
 #include <cstdarg>
 #include <cstddef>
 #include <cstring>
+#include <cstdlib>
 #include <dlfcn.h>
 #include <fcntl.h>
+#include <fstream>
 #include <iomanip>
 #include <mutex>
 #include <sstream>
@@ -38,12 +41,14 @@ namespace {
 using Ioctl = int(*)(int, unsigned long, ...);
 Ioctl next_ioctl = nullptr;
 std::atomic<bool> recording{false};
+bool gpfifo_metadata = false;
 thread_local bool inside = false;
 struct Guard { Guard() { inside = true; } ~Guard() { inside = false; } };
 struct State {
     std::recursive_mutex mutex; int log = -1; pid_t owner = 0; uint64_t seq = 0; bool failed = false;
     bool reads_armed = false; unsigned rounds = 0; uint64_t read_deadline = 0;
     std::vector<uint64_t> userd_addresses;
+    uint64_t ring_address = 0; unsigned ring_entries = 0;
 };
 State& state() { static auto* s = new State; return *s; }
 uint64_t ns() { timespec ts{}; clock_gettime(CLOCK_MONOTONIC_RAW, &ts); return uint64_t(ts.tv_sec) * 1000000000 + ts.tv_nsec; }
@@ -76,7 +81,8 @@ uint64_t emit(const char* kind, uint64_t begin, uint64_t end, const std::string&
     auto& s = state();
     // During the short read window any captured syscall, even an unrelated one,
     // invalidates the live audit. Do not guess which topology changes are safe.
-    if (s.reads_armed && strcmp(kind, "userd_sample") && strcmp(kind, "mark")) s.failed = true;
+    if (s.reads_armed && strcmp(kind, "userd_sample") && strcmp(kind, "ring_sample") &&
+        strcmp(kind, "ring_progress") && strcmp(kind, "mark")) s.failed = true;
     if (s.owner != getpid() || s.log < 0 || s.seq >= 20000) { s.failed = true; return 0; }
     std::ostringstream row;
     row << "{\"seq\":" << ++s.seq << ",\"pid\":" << s.owner << ",\"tid\":" << syscall(SYS_gettid)
@@ -113,11 +119,22 @@ void decode(int fd, unsigned long request, void* arg, int rc, int error, uint64_
             const auto& p = *static_cast<NV_CHANNEL_ALLOC_PARAMS*>(payload);
             s << ",\"channel_flags\":" << p.flags << ",\"engine\":" << p.engineType
               << ",\"gpfifo_gpu_va\":" << p.gpFifoOffset << ",\"gpfifo_entries\":" << p.gpFifoEntries
-              << ",\"vaspace\":" << p.hVASpace << ",\"userd_handles\":[";
+              << ",\"vaspace\":" << p.hVASpace << ",\"context_share\":" << p.hContextShare << ",\"userd_handles\":[";
             for (unsigned i = 0; i < NV_MAX_SUBDEVICES; ++i) { if (i) s << ','; s << p.hUserdMemory[i]; }
             s << "],\"userd_offsets\":[";
             for (unsigned i = 0; i < NV_MAX_SUBDEVICES; ++i) { if (i) s << ','; s << p.userdOffset[i]; }
             s << ']';
+        }
+        if (gpfifo_metadata && !status && (cls == 0xa06c || cls == 0x9067)) {
+            const auto expected = cls == 0xa06c ? sizeof(NV_CHANNEL_GROUP_ALLOCATION_PARAMETERS) : sizeof(NV_CTXSHARE_ALLOCATION_PARAMETERS);
+            if (flags || !payload || (bytes && bytes != expected)) {
+                state().failed = true; emit("unknown_vaspace_binding_abi", begin, end, s.str()); return;
+            }
+            if (cls == 0xa06c) s << ",\"group_vaspace\":" << static_cast<NV_CHANNEL_GROUP_ALLOCATION_PARAMETERS*>(payload)->hVASpace;
+            else {
+                const auto& p = *static_cast<NV_CTXSHARE_ALLOCATION_PARAMETERS*>(payload);
+                s << ",\"ctxshare_vaspace\":" << p.hVASpace << ",\"ctxshare_flags\":" << p.flags;
+            }
         }
         emit("alloc", begin, end, s.str());
     } else if (nr == NV_ESC_RM_MAP_MEMORY && size == sizeof(nv_ioctl_nvos33_parameters_with_fd)) {
@@ -154,6 +171,88 @@ void decode(int fd, unsigned long request, void* arg, int rc, int error, uint64_
         emit("control", begin, end, s.str());
     } else emit("ioctl", begin, end, s.str());
 }
+std::string uuid_hex(const NvProcessorUuid& uuid) {
+    std::ostringstream s;
+    for (unsigned char b : uuid.uuid) s << std::hex << std::setfill('0') << std::setw(2) << unsigned(b);
+    return s.str();
+}
+void decode_uvm(int fd, unsigned long request, void* arg, int rc, uint64_t begin, uint64_t end, const Fd& file) {
+    std::ostringstream s;
+    s << ",\"fd\":" << fd << fd_fields(file) << ",\"uvm_request\":" << request << ",\"rc\":" << rc;
+    const char* kind = "uvm_ioctl";
+    if (!rc && arg) {
+        if (request == UVM_INITIALIZE) {
+            const auto& p = *static_cast<UVM_INITIALIZE_PARAMS*>(arg);
+            kind = "uvm_initialize"; s << ",\"flags\":" << p.flags << ",\"status\":" << p.rmStatus;
+        } else if (request == UVM_MM_INITIALIZE) {
+            const auto& p = *static_cast<UVM_MM_INITIALIZE_PARAMS*>(arg);
+            kind = "uvm_mm_initialize"; s << ",\"uvm_fd\":" << p.uvmFd << ",\"status\":" << p.rmStatus;
+        } else if (request == UVM_REGISTER_GPU_VASPACE) {
+            const auto& p = *static_cast<UVM_REGISTER_GPU_VASPACE_PARAMS*>(arg);
+            kind = "uvm_register_vaspace";
+            s << ",\"client\":" << p.hClient << ",\"vaspace\":" << p.hVaSpace << ",\"rm_fd\":" << p.rmCtrlFd
+              << fd_fields(fd_info(p.rmCtrlFd), "rm_") << ",\"gpu_uuid_hex\":\"" << uuid_hex(p.gpuUuid) << "\",\"status\":" << p.rmStatus;
+        } else if (request == UVM_UNREGISTER_GPU_VASPACE) {
+            const auto& p = *static_cast<UVM_UNREGISTER_GPU_VASPACE_PARAMS*>(arg);
+            kind = "uvm_unregister_vaspace"; s << ",\"gpu_uuid_hex\":\"" << uuid_hex(p.gpuUuid) << "\",\"status\":" << p.rmStatus;
+        } else if (request == UVM_REGISTER_CHANNEL) {
+            const auto& p = *static_cast<UVM_REGISTER_CHANNEL_PARAMS*>(arg);
+            kind = "uvm_register_channel";
+            s << ",\"client\":" << p.hClient << ",\"channel\":" << p.hChannel << ",\"rm_fd\":" << p.rmCtrlFd
+              << fd_fields(fd_info(p.rmCtrlFd), "rm_") << ",\"gpu_uuid_hex\":\"" << uuid_hex(p.gpuUuid)
+              << "\",\"base\":" << p.base << ",\"length\":" << p.length << ",\"status\":" << p.rmStatus;
+        } else if (request == UVM_MAP_EXTERNAL_ALLOCATION) {
+            const auto& p = *static_cast<UVM_MAP_EXTERNAL_ALLOCATION_PARAMS*>(arg);
+            kind = "uvm_map_external";
+            s << ",\"client\":" << p.hClient << ",\"memory\":" << p.hMemory << ",\"rm_fd\":" << p.rmCtrlFd
+              << fd_fields(fd_info(p.rmCtrlFd), "rm_") << ",\"base\":" << p.base << ",\"length\":" << p.length
+              << ",\"offset\":" << p.offset << ",\"status\":" << p.rmStatus << ",\"gpu_attributes\":[";
+            if (p.gpuAttributesCount > UVM_MAX_GPUS) { state().failed = true; return; }
+            for (unsigned i = 0; i < p.gpuAttributesCount; ++i) {
+                if (i) s << ',';
+                const auto& a = p.perGpuAttributes[i];
+                s << "{\"gpu_uuid_hex\":\"" << uuid_hex(a.gpuUuid) << "\",\"mapping_type\":" << a.gpuMappingType << '}';
+            }
+            s << ']';
+        } else if (request == UVM_FREE) {
+            const auto& p = *static_cast<UVM_FREE_PARAMS*>(arg);
+            kind = "uvm_free"; s << ",\"base\":" << p.base << ",\"status\":" << p.rmStatus;
+        } else if (request == UVM_UNMAP_EXTERNAL) {
+            const auto& p = *static_cast<UVM_UNMAP_EXTERNAL_PARAMS*>(arg);
+            kind = "uvm_unmap_external";
+            s << ",\"base\":" << p.base << ",\"length\":" << p.length
+              << ",\"gpu_uuid_hex\":\"" << uuid_hex(p.gpuUuid) << "\",\"status\":" << p.rmStatus;
+        } else if (request == UVM_MAP_EXTERNAL_SPARSE) {
+            const auto& p = *static_cast<UVM_MAP_EXTERNAL_SPARSE_PARAMS*>(arg);
+            kind = "uvm_unmap_external";
+            s << ",\"base\":" << p.base << ",\"length\":" << p.length
+              << ",\"gpu_uuid_hex\":\"" << uuid_hex(p.gpuUuid) << "\",\"status\":" << p.rmStatus;
+        } else if (request == UVM_UNREGISTER_CHANNEL) {
+            const auto& p = *static_cast<UVM_UNREGISTER_CHANNEL_PARAMS*>(arg);
+            kind = "uvm_unregister_channel";
+            s << ",\"client\":" << p.hClient << ",\"channel\":" << p.hChannel << ",\"status\":" << p.rmStatus;
+        } else if (request == UVM_CREATE_EXTERNAL_RANGE) {
+            const auto& p = *static_cast<UVM_CREATE_EXTERNAL_RANGE_PARAMS*>(arg);
+            kind = "uvm_create_range";
+            s << ",\"base\":" << p.base << ",\"length\":" << p.length << ",\"status\":" << p.rmStatus;
+        } else if (request == UVM_CREATE_RANGE_GROUP) {
+            kind = "uvm_create_range_group";
+            s << ",\"status\":" << static_cast<UVM_CREATE_RANGE_GROUP_PARAMS*>(arg)->rmStatus;
+        } else if (request == UVM_VALIDATE_VA_RANGE) {
+            kind = "uvm_validate_range";
+            s << ",\"status\":" << static_cast<UVM_VALIDATE_VA_RANGE_PARAMS*>(arg)->rmStatus;
+        } else if (request == UVM_MAP_DYNAMIC_PARALLELISM_REGION) {
+            const auto& p = *static_cast<UVM_MAP_DYNAMIC_PARALLELISM_REGION_PARAMS*>(arg);
+            kind = "uvm_other_range";
+            s << ",\"base\":" << p.base << ",\"length\":" << p.length << ",\"status\":" << p.rmStatus;
+        } else if (request == UVM_ALLOC_SEMAPHORE_POOL) {
+            const auto& p = *static_cast<UVM_ALLOC_SEMAPHORE_POOL_PARAMS*>(arg);
+            kind = "uvm_other_range";
+            s << ",\"base\":" << p.base << ",\"length\":" << p.length << ",\"status\":" << p.rmStatus;
+        }
+    }
+    emit(kind, begin, end, s.str());
+}
 void* observe_mmap(void* addr, size_t length, int prot, int flags, int fd, off64_t offset) {
     // The Linux libc wrappers use this syscall too. Forward exactly the original
     // application request; never manufacture a mapping or alter protections.
@@ -182,11 +281,17 @@ extern "C" int userd_observer_begin(const char* path) {
     Dl_info info{};
     if (!next_ioctl || !dladdr(reinterpret_cast<void*>(next_ioctl), &info) || !info.dli_fname ||
         !strstr(info.dli_fname, "librm_control.so")) return -2;
+    const char* mode = std::getenv("BENCH_GPFIFO_METADATA");
+    gpfifo_metadata = mode && !strcmp(mode, "1");
+    if (gpfifo_metadata) {
+        std::ifstream version("/sys/module/nvidia_uvm/version"); std::string value; version >> value;
+        if (value != "595.58.03") return -5;
+    }
     s.log = open(path, O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, 0600);
     if (s.log < 0) return -3;
     s.owner = getpid(); recording = true;
     const auto now = ns();
-    return emit("start", now, now, ",\"abi\":1,\"bridge_hook_next\":true,\"channel_alloc_size\":" + std::to_string(sizeof(NV_CHANNEL_ALLOC_PARAMS))) ? 0 : -4;
+    return emit("start", now, now, ",\"abi\":1,\"bridge_hook_next\":true,\"gpfifo_metadata\":" + std::to_string(gpfifo_metadata) + ",\"channel_alloc_size\":" + std::to_string(sizeof(NV_CHANNEL_ALLOC_PARAMS))) ? 0 : -4;
 }
 extern "C" uint64_t userd_observer_mark(const char* label) {
     if (!recording || inside || !label || strspn(label, "abcdefghijklmnopqrstuvwxyz_") != strlen(label)) return 0;
@@ -204,7 +309,8 @@ extern "C" int userd_observer_arm_reads(uint64_t sequence, const uint64_t* addre
         for (unsigned j = 0; j < i; ++j) if (addresses[i] == addresses[j]) return 0;
     }
     s.userd_addresses.assign(addresses, addresses + count);
-    s.read_deadline = ns() + 3000000000ULL; s.reads_armed = true;
+    s.read_deadline = ns() + 3000000000ULL; s.reads_armed = true; s.rounds = 0;
+    s.ring_address = 0; s.ring_entries = 0;
     return 1;
 }
 extern "C" int userd_observer_sample(const char* label, uint64_t api_begin, uint64_t api_end, int result) {
@@ -233,23 +339,75 @@ extern "C" int userd_observer_sample(const char* label, uint64_t api_begin, uint
                << ",\"get_second\":" << get1 << ",\"put_second\":" << put1 << '}';
     }
     fields << ']';
-    return emit("userd_sample", begin, ns(), fields.str()) ? 1 : 0;
+    return emit(s.ring_address ? "ring_progress" : "userd_sample", begin, ns(), fields.str()) ? 1 : 0;
+}
+extern "C" int userd_observer_arm_ring(uint64_t sequence, const uint64_t* addresses, unsigned count,
+                                     uint64_t ring_address, unsigned entries) {
+    if (!gpfifo_metadata || !ring_address || ring_address % 8 || !entries || entries > 4096 ||
+        (entries & (entries - 1))) return 0;
+    if (!userd_observer_arm_reads(sequence, addresses, count)) return 0;
+    Guard guard; auto& s = state(); std::lock_guard<std::recursive_mutex> lock(s.mutex);
+    if (s.failed) return 0;
+    s.ring_address = ring_address; s.ring_entries = entries; return 1;
+}
+extern "C" int userd_observer_ring_sample(const char* label, unsigned launch_index,
+                                        uint64_t api_begin, uint64_t api_end, int result) {
+    if (!recording || inside || !label || strspn(label, "abcdefghijklmnopqrstuvwxyz_") != strlen(label)) return 0;
+    Guard guard; auto& s = state(); std::lock_guard<std::recursive_mutex> lock(s.mutex);
+    if (s.failed || !s.reads_armed || !s.ring_address || s.owner != getpid() || s.rounds >= 256 || ns() >= s.read_deadline) {
+        s.failed = true; return 0;
+    }
+    const auto begin = ns(); std::ostringstream fields;
+    fields << ",\"label\":\"" << label << "\",\"launch_index\":" << launch_index << ",\"round\":" << s.rounds++
+           << ",\"api_begin_ns\":" << api_begin << ",\"api_end_ns\":" << api_end << ",\"api_result\":" << result;
+    auto userd = [&](const char* key) {
+        fields << ",\"" << key << "\":[";
+        for (unsigned i = 0; i < s.userd_addresses.size(); ++i) {
+            auto* p = reinterpret_cast<const Nvc56fControl*>(s.userd_addresses[i]);
+            const auto t0 = ns();
+            asm volatile("lfence" ::: "memory"); const uint32_t get = p->GPGet;
+            asm volatile("lfence" ::: "memory"); const uint32_t put = p->GPPut;
+            asm volatile("lfence" ::: "memory"); const auto t1 = ns();
+            if (i) fields << ',';
+            fields << "{\"ordinal\":" << i << ",\"begin_ns\":" << t0 << ",\"end_ns\":" << t1
+                   << ",\"get\":" << get << ",\"put\":" << put << '}';
+        }
+        fields << ']';
+    };
+    userd("userd_before");
+    // Read the complete already-mapped ring twice, including untouched slots.
+    // Values stay opaque; equality is the only interpretation in this probe.
+    auto* ring = reinterpret_cast<const volatile uint64_t*>(s.ring_address);
+    for (int pass = 0; pass < 2; ++pass) {
+        fields << ",\"ring_" << (pass ? "second" : "first") << "\":[";
+        for (unsigned i = 0; i < s.ring_entries; ++i) {
+            asm volatile("lfence" ::: "memory"); const uint64_t value = ring[i];
+            if (i) fields << ',';
+            fields << '"' << std::hex << std::setfill('0') << std::setw(16) << value << '"' << std::dec;
+        }
+        asm volatile("lfence" ::: "memory"); fields << ']';
+    }
+    userd("userd_after");
+    return emit("ring_sample", begin, ns(), fields.str()) ? 1 : 0;
 }
 extern "C" int userd_observer_finish_reads() {
     Guard guard; auto& s = state(); std::lock_guard<std::recursive_mutex> lock(s.mutex);
     if (!s.reads_armed || s.failed || s.owner != getpid()) return 0;
     s.reads_armed = false; const auto now = ns();
-    return emit("mark", now, now, ",\"label\":\"reads_finished\"") ? static_cast<int>(s.rounds) : 0;
+    return emit("mark", now, now, s.ring_address ? ",\"label\":\"ring_reads_finished\"" : ",\"label\":\"reads_finished\"") ? static_cast<int>(s.rounds) : 0;
 }
 extern "C" int ioctl(int fd, unsigned long request, ...) noexcept {
     va_list args; va_start(args, request); void* arg = va_arg(args, void*); va_end(args);
     if (!next_ioctl) next_ioctl = reinterpret_cast<Ioctl>(dlsym(RTLD_NEXT, "ioctl"));
-    if (!recording || inside || _IOC_TYPE(request) != 'F')
+    if (!recording || inside || (_IOC_TYPE(request) != 'F' && !gpfifo_metadata))
         return next_ioctl ? next_ioctl(fd, request, arg) : static_cast<int>(syscall(SYS_ioctl, fd, request, arg));
     Guard guard; auto& s = state(); std::lock_guard<std::recursive_mutex> lock(s.mutex);
     const auto file = fd_info(fd); const auto begin = ns();
     const int result = next_ioctl(fd, request, arg), error = errno; const auto end = ns();
-    try { if (file.nvidia) decode(fd, request, arg, result, error, begin, end, file); }
+    try {
+        if (gpfifo_metadata && file.path == "/dev/nvidia-uvm") decode_uvm(fd, request, arg, result, begin, end, file);
+        else if (file.nvidia && _IOC_TYPE(request) == 'F') decode(fd, request, arg, result, error, begin, end, file);
+    }
     catch (...) { s.failed = true; }
     errno = error; return result;
 }

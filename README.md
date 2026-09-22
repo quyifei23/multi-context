@@ -1,8 +1,12 @@
 # CUDA Driver API 双 Context 接管 microbenchmark
 
+最新 [GPFIFO entry 映射实验](GPFIFO_ENTRY_EXPERIMENT.md)：两次独立进程将隔离 tiny launch 唯一对应到
+`ring[7] → ring[8]` 和 `ring[1023] → ring[0]`；每次 PUT 模 1024 加 1，完整 ring 仅该 slot 改变。
+只读取已存在的合法映射。该结果覆盖本次单 launch，不等于完整 epoch 覆盖、硬件消费语义或 rewind 安全性。
+
 后续 [USERD GET/PUT 最小采样实验](USERD_PROGRESS_EXPERIMENT.md)：一次 smoke 中，隔离 tiny launch 后
 一个 channel 的 PUT 从 5 到 6，GET 在无 CUDA API 窗口内追上；新增 RM control 为 0。
-已验证字段可读且变化，尚未建立 sentinel→entry 映射或硬件消费时刻语义。
+该阶段验证了字段可读且变化，当时尚未建立 sentinel→entry 映射或硬件消费时刻语义。
 
 后续 [USERD 最小映射实验](USERD_MAPPING_EXPERIMENT.md)：两次 smoke 均验证 A compute TSG 的 8/8 个 channel
 可关联到既有 CPU 映射；新增 RM control 为 0。该阶段只验证 mapping，未读取内容。

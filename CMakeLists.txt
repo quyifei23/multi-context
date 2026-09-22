@@ -51,3 +51,31 @@ if(BENCH_INTERCEPTION_SOURCE OR BENCH_RM_LIBRARY)
   add_dependencies(context_ping_pong epoch_sentinel)
   target_compile_definitions(context_ping_pong PRIVATE BENCH_SENTINEL_CUBIN_PATH="${BENCH_SENTINEL_CUBIN}")
 endif()
+# Opt-in, passive libc observation only. This target never constructs an RM
+# request or requests an extra mapping; it records normal libcuda calls.
+set(BENCH_NVIDIA_SOURCE "" CACHE PATH "Unmodified NVIDIA 595.58.03 source for USERD mapping audit")
+if(BENCH_NVIDIA_SOURCE)
+  if(NOT BENCH_INTERCEPTION_SOURCE OR NOT BENCH_RM_LIBRARY)
+    message(FATAL_ERROR "USERD audit also requires the existing RM capture bridge")
+  endif()
+  execute_process(COMMAND git -C "${BENCH_NVIDIA_SOURCE}" rev-parse HEAD
+    OUTPUT_VARIABLE USERD_SOURCE_HEAD OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE USERD_GIT_RESULT)
+  execute_process(COMMAND git -C "${BENCH_NVIDIA_SOURCE}" diff --quiet HEAD
+    RESULT_VARIABLE USERD_SOURCE_DIFF)
+  if(NOT USERD_GIT_RESULT EQUAL 0 OR NOT USERD_SOURCE_DIFF EQUAL 0 OR
+      NOT USERD_SOURCE_HEAD STREQUAL "db0c4e65c8e34c678d745ddb1317f53f90d1072b")
+    message(FATAL_ERROR "USERD audit requires the unmodified pinned 595.58.03 checkout")
+  endif()
+  add_library(userd_observer SHARED src/userd_observer.cpp)
+  target_compile_features(userd_observer PRIVATE cxx_std_17)
+  target_compile_options(userd_observer PRIVATE -Wall -Wextra -Werror)
+  target_include_directories(userd_observer PRIVATE
+    "${BENCH_NVIDIA_SOURCE}/src/common/sdk/nvidia/inc"
+    "${BENCH_NVIDIA_SOURCE}/src/common/inc"
+    "${BENCH_NVIDIA_SOURCE}/src/nvidia/arch/nvalloc/unix/include")
+  target_link_libraries(userd_observer PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+endif()
+if(TARGET userd_observer)
+  target_link_libraries(context_ping_pong PRIVATE userd_observer)
+  target_compile_definitions(context_ping_pong PRIVATE BENCH_HAS_USERD_OBSERVER=1)
+endif()

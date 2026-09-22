@@ -97,6 +97,7 @@ void usage() {
     std::cout << R"(CUDA Driver API context ping-pong (Linux, default cubin: sm_80/A100)
 Usage: context_ping_pong [options]
   --mode all|standby|takeover|live-handoff|preempt-hold   Default: all (legacy)
+         userd-map                 Passive channel/USERD mapping audit; no added RM controls
   --long-ms 10,100,1000            Target durations; fixed work calibrated with Events
   --trials N                      Measured trials per case/target (default: 10)
   --warmup N                      Warmup launches (default: 3, minimum: 1)
@@ -176,8 +177,15 @@ Options parse(int argc, char** argv) {
             while (std::getline(input, part, ',')) o.durations.push_back(number(part));
         } else throw std::runtime_error("Unknown option: " + key);
     }
-    if (o.mode != "all" && o.mode != "standby" && o.mode != "takeover" && o.mode != "live-handoff" && o.mode != "preempt-hold")
+    if (o.mode != "all" && o.mode != "standby" && o.mode != "takeover" && o.mode != "live-handoff" && o.mode != "preempt-hold" && o.mode != "userd-map")
         throw std::runtime_error("Unknown --mode");
+    if (o.mode == "userd-map") {
+#ifndef BENCH_HAS_USERD_OBSERVER
+        throw std::runtime_error("Rebuild with BENCH_NVIDIA_SOURCE and the existing RM bridge for userd-map");
+#endif
+        if (o.query_timeout_ms <= 0 || o.query_timeout_ms > 10000)
+            throw std::runtime_error("userd-map requires query-timeout-ms in (0,10000]");
+    }
     if (o.mode == "preempt-hold") {
 #ifndef BENCH_HAS_RM
         throw std::runtime_error("Rebuild with BENCH_INTERCEPTION_SOURCE and BENCH_RM_LIBRARY for preempt-hold");
@@ -698,8 +706,14 @@ void metadata_before_cuda(Output& out, const Options& o, int argc, char** argv) 
 #ifdef BENCH_HAS_RM
 #include "rm_handoff.hpp"
 #endif
+#ifdef BENCH_HAS_USERD_OBSERVER
+#include "userd_mapping.hpp"
+#endif
 
 void experiments(Options& o, Output& out) {
+#ifdef BENCH_HAS_USERD_OBSERVER
+    if (o.mode == "userd-map") run_userd_mapping(o, out);
+#endif
 #ifdef BENCH_HAS_RM
     // The capture bridge must be configured before the first CUDA call.
     std::unique_ptr<RmBridge> rm;

@@ -1,0 +1,9 @@
+userd_offset,mapping_bytes,gpfifo_entries,mapping_verified,channel_ordinal,owner_generation_verified,physical_uuid_verified,live_readable_vma_verified
+8192,2097152,1024,True,0,True,True,True
+20480,2097152,1024,True,1,True,True,True
+32768,2097152,1024,True,2,True,True,True
+45056,2097152,1024,True,3,True,True,True
+57344,2097152,1024,True,4,True,True,True
+69632,2097152,1024,True,5,True,True,True
+81920,2097152,1024,True,6,True,True,True
+94208,2097152,1024,True,7,True,True,True

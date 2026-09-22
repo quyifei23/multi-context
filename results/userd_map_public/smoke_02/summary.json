@@ -1,0 +1,27 @@
+{
+  "classification": "already_mapped_state_available",
+  "scope": "owned_A_compute_TSG_USERD_binding_only",
+  "snapshots": 2,
+  "verified_channels": 8,
+  "channels_in_target_group": 8,
+  "same_mapping_across_snapshots": true,
+  "passive_uuid_responses_per_snapshot": [
+    2,
+    2
+  ],
+  "observer_bridge_matching_ioctl_counts": [
+    1307,
+    1307
+  ],
+  "observations": 1510,
+  "project_rm_controls": 0,
+  "get_put_memory_reads": 0,
+  "sentinel_entry_mapping_established": false,
+  "rewind_trials": 0,
+  "source_commit": "db0c4e65c8e34c678d745ddb1317f53f90d1072b",
+  "limits": [
+    "libc-interposed calls only; direct/hidden syscalls are outside capture coverage",
+    "USERD GET/PUT contents, update semantics and RAMFC state not sampled",
+    "CUDA logical submission to GPFIFO entry mapping not established"
+  ]
+}

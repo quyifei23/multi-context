@@ -1,5 +1,8 @@
 # CUDA Driver API 双 Context 接管 microbenchmark
 
+后续 [USERD 最小映射实验](USERD_MAPPING_EXPERIMENT.md)：两次 smoke 均验证 A compute TSG 的 8/8 个 channel
+可关联到既有 CPU 映射；新增 RM control 为 0。尚未读取 GET/PUT 或建立 sentinel→entry 映射。
+
 后续 [GP_PUT rewind 实验](REWIND_EXPERIMENT.md)：false/true smoke 与 5 对 matched trials 共 12/12 均为
 `old_queue_preserved`。stock rewind 被接受，但本提交布局的 old sentinel 仍执行；Context 新 stream 可用。
 

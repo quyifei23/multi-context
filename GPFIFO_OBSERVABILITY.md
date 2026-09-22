@@ -2,6 +2,10 @@
 
 日期：2026-09-22。**Phase A 完成；Phase B 未执行。**
 
+后续：[最小 USERD 映射实验](USERD_MAPPING_EXPERIMENT.md)已将本次 A compute TSG 的 8 个 channel
+关联到既有 CPU 映射，并被动核对了物理 UUID。下文保留接口考古时的证据状态；
+新结果只解决 USERD binding，尚未读取 GET/PUT 或建立 sentinel→entry 映射。
+
 **当前可验证、可供本 benchmark 使用的接口不足以判断某个 CUDA epoch 是否仍在可 rewind 的未消费区间。**
 公开源码存在 USERD GET/PUT 布局、按 owner memory object 建立 CPU 映射的路径，以及返回 context buffer 的 RM 查询候选；
 但尚未把它们连成“本次 A channel → 有效 progress 读数 → old sentinel entry”的证据链。

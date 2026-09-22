@@ -38,7 +38,7 @@ public:
         directory_ = o.output + ".rm";
         if (!std::filesystem::create_directory(directory_))
             throw std::runtime_error("RM evidence directory already exists: " + directory_.string());
-        const unsigned budget = static_cast<unsigned>(2 * o.trials * o.durations.size() + 2);
+        const unsigned budget = static_cast<unsigned>((o.rm_case == "rewind-paired" ? 4 : 2) * o.trials * o.durations.size() + 2);
         check(ap_bridge_create(uuid_.c_str(), uuid_.c_str(), AP_BRIDGE_OWNER_BACKGROUND, 1, budget, &session_), "bridge create");
         check(ap_bridge_open_journal(session_, directory_.c_str(), "A"), "open RM journal");
         out.meta("rm_schema_version", 1);
@@ -79,6 +79,7 @@ public:
         RmTrace range(trace, "mc." + kind + "/" + std::to_string(index));
         call.begin = now_ns();
         if (kind == "preempt") call.api_result = ap_bridge_preempt(session_, 1000000, &call.result);
+        else if (kind == "fifo_rewind") call.api_result = ap_bridge_discard_queued(session_, &call.result);
         else if (kind == "schedule_disable" || kind == "schedule_enable")
             call.api_result = ap_bridge_set_enabled(session_, enable, &call.result);
         else call.api_result = ap_bridge_set_channels_enabled(session_, enable, &call.result);
@@ -92,6 +93,8 @@ public:
             throw std::runtime_error("Bridge returned success without accepted RM control");
     }
 };
+
+#include "rewind_experiment.hpp"
 
 struct RmRecord {
     int index = 0, pending_before_rearm = -1, output_matches = -1, reuse_ok = -1;
@@ -253,6 +256,8 @@ void rm_trial(Worker& a, Worker& b, RmBridge& bridge, const Options& o, Sample& 
 void rm_experiments(CUdevice device, const Options& o, Output& out, RmBridge& bridge) {
     RmOutput rm_out(o);
     Worker a, b;
+    const bool rewind = o.rm_case.rfind("rewind-", 0) == 0;
+    std::unique_ptr<EpochState> epochs;
     out.meta("thread_a_tid", a.submit([&](GpuState&) { pin_cpu(o.cpu_a); return syscall(SYS_gettid); }).get());
     out.meta("thread_b_tid", b.submit([&](GpuState&) { pin_cpu(o.cpu_b); return syscall(SYS_gettid); }).get());
     pin_cpu(o.cpu_control);
@@ -263,8 +268,10 @@ void rm_experiments(CUdevice device, const Options& o, Output& out, RmBridge& br
             bridge.begin_a_scope();
             try {
                 RmTrace trace(o.trace_marks, "mc.map.A");
+                if (rewind) g.set_query_timeout(o.query_timeout_ms);
                 g.create(device, o, true);
                 for (int i = 0; i < o.warmup; ++i) g.run_long(1024, true);
+                if (rewind) epochs = std::make_unique<EpochState>(o, g);
                 bridge.end_a_scope();
             } catch (...) { bridge.end_a_scope(); throw; }
             out.meta("a_context_address", g.context_address());
@@ -272,6 +279,7 @@ void rm_experiments(CUdevice device, const Options& o, Output& out, RmBridge& br
         }).get();
         b.submit([&](GpuState& g) {
             RmTrace trace(o.trace_marks, "mc.map.B");
+            if (rewind) g.set_query_timeout(o.query_timeout_ms);
             g.create(device, o, false);
             for (int i = 0; i < o.warmup; ++i) { Sample warm; g.run_tiny(warm); }
             out.meta("b_context_address", g.context_address());
@@ -283,7 +291,7 @@ void rm_experiments(CUdevice device, const Options& o, Output& out, RmBridge& br
         // Prepare the reversible control on an idle A before timed requests;
         // FIFO preparation also performs the bridge's independent RM GPU UUID
         // query. Never hide that first query inside takeover latency.
-        if (o.rm_probe || o.rm_case == "all" || o.rm_case == "preempt-hold" || o.rm_case == "schedule-hold" || o.rm_case == "fifo-hold") {
+        if (rewind || o.rm_probe || o.rm_case == "all" || o.rm_case == "preempt-hold" || o.rm_case == "schedule-hold" || o.rm_case == "fifo-hold") {
             a.submit([&](GpuState& g) {
                 const std::string kind = o.rm_case == "schedule-hold" ? "schedule_" : "fifo_";
                 RmCall disable, enable;
@@ -293,6 +301,7 @@ void rm_experiments(CUdevice device, const Options& o, Output& out, RmBridge& br
             }).get();
         }
         bridge.save("prepared");
+        if (rewind) run_rewind(a, b, *epochs, bridge, o, out);
         if (!o.rm_probe) {
             std::vector<std::string> cases = o.rm_case == "all" ?
                 std::vector<std::string>{"live-handoff", "preempt-resume", "preempt-hold"} :

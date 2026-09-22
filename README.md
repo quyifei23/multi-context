@@ -1,5 +1,8 @@
 # CUDA Driver API 双 Context 接管 microbenchmark
 
+后续 [GP_PUT rewind 实验](REWIND_EXPERIMENT.md)：false/true smoke 与 5 对 matched trials 共 12/12 均为
+`old_queue_preserved`。stock rewind 被接受，但本提交布局的 old sentinel 仍执行；Context 新 stream 可用。
+
 新增 stock RM 实验：已验证 **channel preempt + hold + enable**，保留 A Context 后由 B 接管。
 单 FIFO control 的 B 完成中位数约 **0.841 ms**，1.2 s hold 窗口内未观测到 A 恢复；
 enable 会恢复旧队列。控制对象、串行 PREEMPT 的恢复窗口、负面对照与可选构建见 [PREEMPT_HOLD.md](PREEMPT_HOLD.md)。

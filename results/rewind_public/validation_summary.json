@@ -1,0 +1,24 @@
+{
+  "smoke_per_condition": 1,
+  "matched_pairs": 5,
+  "all_samples": 12,
+  "classifications": {
+    "old_queue_preserved": 12
+  },
+  "cuda_async_errors_observed": 0,
+  "old_token_seen_before_new_submission_samples": 12,
+  "matched_pairs_same_iterations": true,
+  "matched_samples_share_A_context_and_compute_buffer": true,
+  "unique_non_recycled_old_and_new_buffers": true,
+  "fresh_stream_each_new_epoch": true,
+  "only_FIFO_rewind_byte_changes_within_matched_run": true,
+  "group_preempt_calls": 0,
+  "explicit_context_destroy_calls": 0,
+  "nsight_runs": 0,
+  "nsight_reason": "device-written unique tokens and Event completion distinguish the observed old/new outcomes; GP_GET consumption was not observed",
+  "limits": [
+    "CUDA enqueue does not prove the sentinel GPFIFO entry was unconsumed",
+    "No inference of no-op rewind, firmware behavior or permanent queue discard",
+    "No recovery via Context destruction was tested or used"
+  ]
+}

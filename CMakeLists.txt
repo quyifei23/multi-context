@@ -41,4 +41,13 @@ if(BENCH_INTERCEPTION_SOURCE OR BENCH_RM_LIBRARY)
     BENCH_RM_LIBRARY_PATH="${BENCH_RM_LIBRARY}"
     BENCH_INTERCEPTION_SOURCE_PATH="${BENCH_INTERCEPTION_SOURCE}")
   target_link_libraries(context_ping_pong PRIVATE "${BENCH_RM_LIBRARY}" ${CMAKE_DL_LIBS})
+  set(BENCH_SENTINEL_CUBIN "${CMAKE_CURRENT_BINARY_DIR}/epoch_sentinel.cubin")
+  add_custom_command(OUTPUT "${BENCH_SENTINEL_CUBIN}"
+    COMMAND "${CUDAToolkit_NVCC_EXECUTABLE}" --cubin --std=c++17 -O3 -lineinfo
+            "-arch=sm_${BENCH_CUDA_ARCH}" "${CMAKE_CURRENT_SOURCE_DIR}/src/epoch_sentinel.cu"
+            -o "${BENCH_SENTINEL_CUBIN}"
+    DEPENDS src/epoch_sentinel.cu src/epoch_sentinel.hpp VERBATIM)
+  add_custom_target(epoch_sentinel ALL DEPENDS "${BENCH_SENTINEL_CUBIN}")
+  add_dependencies(context_ping_pong epoch_sentinel)
+  target_compile_definitions(context_ping_pong PRIVATE BENCH_SENTINEL_CUBIN_PATH="${BENCH_SENTINEL_CUBIN}")
 endif()

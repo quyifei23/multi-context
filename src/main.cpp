@@ -90,6 +90,7 @@ struct Options {
     std::string rm_case = "all";
     double hold_ms = 1200;
     bool rm_probe = false, trace_marks = false;
+    double query_timeout_ms = 3000;
 };
 
 void usage() {
@@ -108,7 +109,9 @@ Usage: context_ping_pong [options]
   --estimate-start                Calibrate B GPU clock against CPU brackets
   --rm-case all|live-handoff|preempt-resume|preempt-hold|schedule-hold|fifo-hold
                                   preempt-hold mode only; all = first three cases
+            rewind-false|rewind-true|rewind-paired  Bounded epoch sentinel probe
   --hold-ms MS                    Observation/hold interval (default: 1200 ms)
+  --query-timeout-ms MS           Rewind observation deadline (default: 3000 ms)
   --rm-probe                      Bind A/B and test idle disable/enable, then exit
   --trace-marks                   Emit NVTX labels for an independent Nsight run
   --cpu-a N --cpu-b N --cpu-control N  Optional affinity; use distinct physical cores
@@ -149,6 +152,7 @@ Options parse(int argc, char** argv) {
         else if (key == "--action") o.action = value;
         else if (key == "--rm-case") o.rm_case = value;
         else if (key == "--hold-ms") o.hold_ms = number(value);
+        else if (key == "--query-timeout-ms") o.query_timeout_ms = number(value);
         else if (key == "--output") o.output = value;
         else if (key == "--module") o.module = value;
         else if (key == "--device") o.device = integer(value);
@@ -180,10 +184,15 @@ Options parse(int argc, char** argv) {
 #endif
         if (!durations_set) o.durations = {1000};
         if (o.rm_case != "all" && o.rm_case != "live-handoff" && o.rm_case != "preempt-resume" &&
-            o.rm_case != "preempt-hold" && o.rm_case != "schedule-hold" && o.rm_case != "fifo-hold")
+            o.rm_case != "preempt-hold" && o.rm_case != "schedule-hold" && o.rm_case != "fifo-hold" &&
+            o.rm_case != "rewind-false" && o.rm_case != "rewind-true" && o.rm_case != "rewind-paired")
             throw std::runtime_error("Unknown --rm-case");
         if (!(o.hold_ms > 0 && o.hold_ms <= 10000) || o.trials > 30 || o.trials * o.durations.size() > 30)
             throw std::runtime_error("RM mode: hold-ms in (0,10000], at most 30 trial/target groups");
+        if (o.rm_case.rfind("rewind-", 0) == 0 &&
+            (o.durations.size() != 1 || o.trials > 5 || o.rm_probe ||
+             o.hold_ms <= o.durations[0] || o.query_timeout_ms <= 2 * o.durations[0] || o.query_timeout_ms > 10000))
+            throw std::runtime_error("Rewind: one target, <=5 trials, hold-ms > target, 2*target < query-timeout-ms <=10000, no rm-probe");
     } else if (o.rm_probe || o.trace_marks || o.rm_case != "all") {
         throw std::runtime_error("RM options require --mode preempt-hold");
     }
@@ -315,6 +324,18 @@ class GpuState {
     // Counts every launch on the owner thread, including warmup/calibration,
     // across context recreation. Used to correlate an optional Nsight trace.
     std::uint64_t launch_sequence_ = 0;
+    Ns query_timeout_ = 0;
+    void synchronize_event(CUevent event) {
+        if (!query_timeout_) { CU(cuEventSynchronize(event)); return; }
+        const Ns deadline = now_ns() + query_timeout_;
+        for (;;) {
+            const CUresult result = cuEventQuery(event);
+            if (result == CUDA_SUCCESS) return;
+            if (result != CUDA_ERROR_NOT_READY) CU(result);
+            if (now_ns() >= deadline) throw std::runtime_error("Bounded initialization/calibration Event query timed out");
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
 public:
     ~GpuState() {
         if (ctx_) {
@@ -324,8 +345,13 @@ public:
     }
     bool exists() const { return ctx_ != nullptr; }
     std::uint64_t launch_count() const { return launch_sequence_; }
+    void note_external_launch() { ++launch_sequence_; }
     std::uintptr_t context_address() const { return reinterpret_cast<std::uintptr_t>(ctx_); }
     CUdeviceptr output_address() const { return output_; }
+    CUstream stream() const { return stream_; }
+    CUevent begin_event() const { return begin_; }
+    CUevent end_event() const { return end_; }
+    void set_query_timeout(double ms) { query_timeout_ = static_cast<Ns>(ms * 1e6); }
     std::vector<float> copy_output() {
         std::vector<float> values(static_cast<std::size_t>(blocks_) * threads_);
         CU(cuMemcpyDtoH(values.data(), output_, values.size() * sizeof(float)));
@@ -389,7 +415,7 @@ public:
         return finish_long(iterations, s);
     }
     double finish_long(std::uint64_t iterations, Sample& s) {
-        CU(cuEventSynchronize(end_));
+        synchronize_event(end_);
         s.a_complete_observed = now_ns();
         float ms = 0;
         CU(cuEventElapsedTime(&ms, begin_, end_));
@@ -412,7 +438,7 @@ public:
         s.a_start_gpu_ns = marker_->gpu_ns;
     }
     CUresult query_done() { return cuEventQuery(end_); }
-    void wait_done() { CU(cuEventSynchronize(end_)); }
+    void wait_done() { synchronize_event(end_); }
     void run_tiny(Sample& s, std::atomic<bool>* completed = nullptr) {
         unsigned token = ++token_;
         void* args[] = {&tiny_output_, &token};
@@ -424,9 +450,8 @@ public:
         s.b_launch_return = now_ns();
         CU(result);
         CU(cuEventRecord(end_, stream_));
-        result = cuEventSynchronize(end_);
+        synchronize_event(end_);
         s.b_complete = now_ns();
-        CU(result);
         // Let A query its own Event immediately, before B's elapsed-time query
         // or DtoH copy can add observation delay. No CUDA handle crosses threads.
         if (completed) completed->store(true, std::memory_order_release);

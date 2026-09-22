@@ -1,5 +1,9 @@
 # CUDA Driver API 双 Context 接管 microbenchmark
 
+新增 stock RM 实验：已验证 **channel preempt + hold + enable**，保留 A Context 后由 B 接管。
+单 FIFO control 的 B 完成中位数约 **0.841 ms**，1.2 s hold 窗口内未观测到 A 恢复；
+enable 会恢复旧队列。控制对象、串行 PREEMPT 的恢复窗口、负面对照与可选构建见 [PREEMPT_HOLD.md](PREEMPT_HOLD.md)。
+
 当前研究问题：**A Context 保持存活且长 kernel 尚未完成时，预热的 B 能否提前执行一个短请求？**
 
 使用 `--mode live-handoff` 一起测量 `live-handoff`、`serial-destroy`、`idle` 三个条件。

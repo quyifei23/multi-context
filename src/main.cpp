@@ -87,12 +87,15 @@ struct Options {
     int cpu_a = -1, cpu_b = -1, cpu_control = -1;
     double invalidate_fraction = 0.1, invalidate_ms = -1;
     bool estimate_start = false;
+    std::string rm_case = "all";
+    double hold_ms = 1200;
+    bool rm_probe = false, trace_marks = false;
 };
 
 void usage() {
     std::cout << R"(CUDA Driver API context ping-pong (Linux, default cubin: sm_80/A100)
 Usage: context_ping_pong [options]
-  --mode all|standby|takeover|live-handoff   Default: all (legacy two experiments)
+  --mode all|standby|takeover|live-handoff|preempt-hold   Default: all (legacy)
   --long-ms 10,100,1000            Target durations; fixed work calibrated with Events
   --trials N                      Measured trials per case/target (default: 10)
   --warmup N                      Warmup launches (default: 3, minimum: 1)
@@ -103,6 +106,11 @@ Usage: context_ping_pong [options]
   --invalidate-ms MS              Absolute delay; overrides fraction
   --action destroy|wait-then-destroy|both   Both alternates a pair at fixed work
   --estimate-start                Calibrate B GPU clock against CPU brackets
+  --rm-case all|live-handoff|preempt-resume|preempt-hold|schedule-hold|fifo-hold
+                                  preempt-hold mode only; all = first three cases
+  --hold-ms MS                    Observation/hold interval (default: 1200 ms)
+  --rm-probe                      Bind A/B and test idle disable/enable, then exit
+  --trace-marks                   Emit NVTX labels for an independent Nsight run
   --cpu-a N --cpu-b N --cpu-control N  Optional affinity; use distinct physical cores
   --module PATH                   Device-only cubin (default: build-time path)
   --output PATH                   CSV, with metadata and nvidia-smi sidecars
@@ -128,14 +136,19 @@ int integer(const std::string& value) {
 
 Options parse(int argc, char** argv) {
     Options o;
+    bool durations_set = false;
     for (int i = 1; i < argc; ++i) {
         const std::string key = argv[i];
         if (key == "--help") { usage(); std::exit(0); }
         if (key == "--estimate-start") { o.estimate_start = true; continue; }
+        if (key == "--rm-probe") { o.rm_probe = true; continue; }
+        if (key == "--trace-marks") { o.trace_marks = true; continue; }
         if (i + 1 == argc) throw std::runtime_error("Missing value for " + key);
         const std::string value = argv[++i];
         if (key == "--mode") o.mode = value;
         else if (key == "--action") o.action = value;
+        else if (key == "--rm-case") o.rm_case = value;
+        else if (key == "--hold-ms") o.hold_ms = number(value);
         else if (key == "--output") o.output = value;
         else if (key == "--module") o.module = value;
         else if (key == "--device") o.device = integer(value);
@@ -151,6 +164,7 @@ Options parse(int argc, char** argv) {
             o.invalidate_ms = number(value);
             if (o.invalidate_ms < 0) throw std::runtime_error("--invalidate-ms must be >= 0");
         } else if (key == "--long-ms") {
+            durations_set = true;
             o.durations.clear();
             if (value.empty() || value.back() == ',') throw std::runtime_error("Empty duration");
             std::istringstream input(value);
@@ -158,8 +172,21 @@ Options parse(int argc, char** argv) {
             while (std::getline(input, part, ',')) o.durations.push_back(number(part));
         } else throw std::runtime_error("Unknown option: " + key);
     }
-    if (o.mode != "all" && o.mode != "standby" && o.mode != "takeover" && o.mode != "live-handoff")
-        throw std::runtime_error("--mode must be all, standby, takeover, or live-handoff");
+    if (o.mode != "all" && o.mode != "standby" && o.mode != "takeover" && o.mode != "live-handoff" && o.mode != "preempt-hold")
+        throw std::runtime_error("Unknown --mode");
+    if (o.mode == "preempt-hold") {
+#ifndef BENCH_HAS_RM
+        throw std::runtime_error("Rebuild with BENCH_INTERCEPTION_SOURCE and BENCH_RM_LIBRARY for preempt-hold");
+#endif
+        if (!durations_set) o.durations = {1000};
+        if (o.rm_case != "all" && o.rm_case != "live-handoff" && o.rm_case != "preempt-resume" &&
+            o.rm_case != "preempt-hold" && o.rm_case != "schedule-hold" && o.rm_case != "fifo-hold")
+            throw std::runtime_error("Unknown --rm-case");
+        if (!(o.hold_ms > 0 && o.hold_ms <= 10000) || o.trials > 30 || o.trials * o.durations.size() > 30)
+            throw std::runtime_error("RM mode: hold-ms in (0,10000], at most 30 trial/target groups");
+    } else if (o.rm_probe || o.trace_marks || o.rm_case != "all") {
+        throw std::runtime_error("RM options require --mode preempt-hold");
+    }
     if (o.mode == "live-handoff") o.estimate_start = true;
     if (o.action != "destroy" && o.action != "wait-then-destroy" && o.action != "both")
         throw std::runtime_error("--action must be destroy, wait-then-destroy, or both");
@@ -297,6 +324,13 @@ public:
     }
     bool exists() const { return ctx_ != nullptr; }
     std::uint64_t launch_count() const { return launch_sequence_; }
+    std::uintptr_t context_address() const { return reinterpret_cast<std::uintptr_t>(ctx_); }
+    CUdeviceptr output_address() const { return output_; }
+    std::vector<float> copy_output() {
+        std::vector<float> values(static_cast<std::size_t>(blocks_) * threads_);
+        CU(cuMemcpyDtoH(values.data(), output_, values.size() * sizeof(float)));
+        return values;
+    }
     void create(CUdevice device, const Options& o, bool is_a) {
         if (ctx_) return;
 #if CUDA_VERSION >= 13000
@@ -636,7 +670,16 @@ void metadata_before_cuda(Output& out, const Options& o, int argc, char** argv) 
     } else { smi << "nvidia-smi unavailable\n"; out.meta("nvidia_smi_exit_status", "unavailable"); }
 }
 
+#ifdef BENCH_HAS_RM
+#include "rm_handoff.hpp"
+#endif
+
 void experiments(Options& o, Output& out) {
+#ifdef BENCH_HAS_RM
+    // The capture bridge must be configured before the first CUDA call.
+    std::unique_ptr<RmBridge> rm;
+    if (o.mode == "preempt-hold") rm = std::make_unique<RmBridge>(o, out);
+#endif
     int driver = 0, count = 0;
     // This version query does not require initialization; preserve it even when
     // this execution environment cannot access a GPU.
@@ -685,6 +728,14 @@ void experiments(Options& o, Output& out) {
     if (const char* blocking = std::getenv("CUDA_LAUNCH_BLOCKING"))
         if (std::string(blocking) != "0") throw std::runtime_error("Unset CUDA_LAUNCH_BLOCKING for asynchronous A launch");
     std::cerr << "GPU: " << name << ", Driver API " << driver << ", Toolkit " << BENCH_TOOLKIT_VERSION << '\n';
+#ifdef BENCH_HAS_RM
+    if (rm) {
+        if (count != 1 || "GPU-" + uuid_text.str() != rm->uuid() || major != 8 || minor != 0)
+            throw std::runtime_error("RM experiment requires the one explicitly selected full A100 UUID");
+        rm_experiments(device, o, out, *rm);
+        return;
+    }
+#endif
     Worker a, b;
     out.meta("thread_a_tid", a.submit([&](GpuState&) { pin_cpu(o.cpu_a); return syscall(SYS_gettid); }).get());
     out.meta("thread_b_tid", b.submit([&](GpuState&) { pin_cpu(o.cpu_b); return syscall(SYS_gettid); }).get());

@@ -20,6 +20,20 @@ def summarize(paths, output):
     for path in paths:
         with open(path, newline="") as handle:
             rows = list(csv.DictReader(handle))
+        rm_metrics = ["invalidate_to_preempt_return_us", "invalidate_to_disable_return_us",
+                      "a_pending_before_rearm", "a_output_matches_reference", "a_reuse_ok"]
+        rm_rows = [r for r in rows if r["experiment"] == "preempt-hold"]
+        if rm_rows:
+            key = lambda r: (r["target_ms"], r["condition"], r["trial"], r["order"])
+            with open(str(path) + ".controls.csv", newline="") as handle:
+                controls = {key(r): r for r in csv.DictReader(handle)}
+            if len(controls) != len(rm_rows):
+                raise ValueError("RM controls CSV does not match samples")
+            for row in rm_rows:
+                control = controls[key(row)]
+                if control["valid"] != row["valid"] or control["t_invalidate_ns"] != row["t_invalidate_ns"]:
+                    raise ValueError("RM controls CSV validity/timestamps do not match samples")
+                row.update({metric: control[metric] for metric in rm_metrics})
         groups = defaultdict(list)
         pairs = defaultdict(dict)
         for row in rows:
@@ -33,13 +47,16 @@ def summarize(paths, output):
             invalid = len(trials) - len(valid)
             metrics = (["invalidate_to_b_launch_us", "invalidate_to_b_gpu_start_est_us", "b_takeover_us",
                         "a_event_pending_after_b_complete", "a_event_ms", "destroy_latency_us"]
-                       if trials[0]["experiment"] == "live-handoff"
+                       if trials[0]["experiment"] in ("live-handoff", "preempt-hold")
                        else ["a_event_ms", "a_effective_gflops"] if trials[0]["experiment"] == "standby"
                        else ["b_request_us"] if condition == "b_with_idle_a"
                        else ["destroy_latency_us", "b_takeover_us", "handoff_us"])
+            if trials[0]["experiment"] == "preempt-hold":
+                metrics += rm_metrics
             for metric in metrics:
                 values = [float(r[metric]) for r in valid if math.isfinite(float(r[metric]))
-                          and not (metric == "a_event_pending_after_b_complete" and float(r[metric]) < 0)]
+                          and not (metric in ("a_event_pending_after_b_complete", "a_pending_before_rearm",
+                                              "a_output_matches_reference", "a_reuse_ok") and float(r[metric]) < 0)]
                 stats = [min(values), statistics.median(values), p95(values)] if values else ["NA"] * 3
                 writer.writerow([path, target, condition, metric, len(values), invalid, *stats])
         ratios = defaultdict(list)

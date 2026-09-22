@@ -1,0 +1,10 @@
+run,condition,trial,target_ms,profile_clock_alignment_valid,profile_invalidate_to_b_gpu_start_est_us,profile_invalidate_to_b_gpu_start_lower_us,profile_invalidate_to_b_gpu_start_upper_us,host_invalidate_to_b_launch_us,host_invalidate_to_b_complete_us,profile_hold_duration_ms,a_restore_events_during_hold,a_context_residency_during_hold_ms,a_kernel_residency_envelope_during_hold_ms,a_kernel_incomplete_until_reenable,a_context_residency_during_b_us,a_context_residency_after_preempt_ms,a_context_residency_preempt_to_disable_return_us,a_context_residency_after_reenable_ms,a_pending_before_rearm,a_output_matches_reference,a_reuse_ok,profile_a_reuse_same_cuda_context,trace_drop_count
+three_conditions,live-handoff,0,1000,1,912.554,912.419,912.689,63.853999999999999,920.04200000000003,nan,-1,nan,nan,-1,0.0,nan,nan,nan,0,1,1,1,unknown
+three_conditions,preempt-resume,0,1000,1,2976.9575,2976.829,2977.086,671.39200000000005,2984.777,nan,-1,nan,nan,-1,0.0,900.099681,nan,nan,0,1,1,1,unknown
+three_conditions,preempt-hold,0,1000,1,1231.5775,1231.429,1231.726,1127.3130000000001,1239.4179999999999,1200.049895,0,0.0,0.0,1,0.0,900.17242,455.827,899.716593,1,1,1,1,unknown
+three_conditions,preempt-resume,1,1000,1,3020.931,3020.837,3021.025,711.50800000000004,3028.828,nan,-1,nan,nan,-1,0.0,896.94471,nan,nan,0,1,1,1,unknown
+three_conditions,preempt-hold,1,1000,1,1304.6585,1304.458,1304.859,1200.0650000000001,1313.328,1200.032298,0,0.0,0.0,1,0.0,897.030335,450.484,896.579851,1,1,1,1,unknown
+three_conditions,live-handoff,1,1000,1,1231.0765,1230.963,1231.19,30.538,1238.8720000000001,nan,-1,nan,nan,-1,0.0,nan,nan,nan,0,1,1,1,unknown
+schedule_probe,schedule-hold,0,1000,1,3022.805,3022.586,3023.024,959.803,3031.0709999999999,1200.041623,1,1199.772879,899.34235,0,0.0,899.558414,216.064,0.0,0,1,1,1,unknown
+fifo_only,fifo-hold,0,1000,1,808.806,808.632,808.98,703.42999999999995,816.24599999999998,1200.033974,0,0.0,0.0,1,0.0,nan,nan,899.547306,1,1,1,1,unknown
+fifo_only,fifo-hold,1,1000,1,865.167,865.037,865.297,763.26499999999999,873.15700000000004,1200.01097,0,0.0,0.0,1,0.0,nan,nan,896.532568,1,1,1,1,unknown

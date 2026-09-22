@@ -66,7 +66,7 @@ def analyze(database, samples, metadata):
 
     output = []
     for s in read_csv(samples):
-        if s["experiment"] != "live-handoff":
+        if s["experiment"] not in ("live-handoff", "preempt-hold"):
             continue
         b_api, b = kernel("b", int(s["b_launch_seq"]))
         a = kernel("a", int(s["a_launch_seq"]))[1] if int(s["a_launch_seq"]) else None
@@ -104,7 +104,7 @@ def analyze(database, samples, metadata):
         output.append(row)
     db.close()
     if not output:
-        raise ValueError("No live-handoff experiment rows in the CSV")
+        raise ValueError("No handoff experiment rows in the CSV")
     return output
 
 

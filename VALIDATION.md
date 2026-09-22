@@ -1,5 +1,8 @@
 # 本地验证记录（2026-09-22）
 
+Stock RM preempt-and-hold 的独立验证见 [PREEMPT_HOLD.md](PREEMPT_HOLD.md)。
+该实验不修改 A kernel 或 `Interception` 的既有桥接代码；原结果和失败记录保留。
+
 这份记录区分编译/host 检查与真实 GPU 实验。沙盒内设备不可见；经用户指出隔离原因后，已在沙盒外完成 A100 实测。
 结果见 [RESULTS.md](RESULTS.md)，当前数据不支持“销毁 busy Context 带来提前接管”的假设。
 新增 [LIVE_HANDOFF.md](LIVE_HANDOFF.md) 单独验证保留 A 的路径，已观察到 B 在 A kernel 结束前执行；

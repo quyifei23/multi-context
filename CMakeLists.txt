@@ -26,3 +26,19 @@ target_compile_definitions(context_ping_pong PRIVATE
   BENCH_TOOLKIT_VERSION="${CUDAToolkit_VERSION}"
   BENCH_CUDA_ARCH=${BENCH_CUDA_ARCH})
 target_link_libraries(context_ping_pong PRIVATE CUDA::cuda_driver Threads::Threads)
+
+# Optional, unchanged Interception owner-scoped RM bridge. The original modes
+# still build without this dependency. Build only rm_control in that project.
+set(BENCH_INTERCEPTION_SOURCE "" CACHE PATH "Interception/active-preempt source directory")
+set(BENCH_RM_LIBRARY "" CACHE FILEPATH "Matching 595.58.03 librm_control.so")
+if(BENCH_INTERCEPTION_SOURCE OR BENCH_RM_LIBRARY)
+  if(NOT EXISTS "${BENCH_INTERCEPTION_SOURCE}/src/ap_bridge.h" OR NOT EXISTS "${BENCH_RM_LIBRARY}")
+    message(FATAL_ERROR "Set both BENCH_INTERCEPTION_SOURCE and BENCH_RM_LIBRARY")
+  endif()
+  find_path(BENCH_NVTX_INCLUDE nvtx3/nvToolsExt.h HINTS ${CUDAToolkit_INCLUDE_DIRS} REQUIRED)
+  target_include_directories(context_ping_pong PRIVATE "${BENCH_INTERCEPTION_SOURCE}/src" "${BENCH_NVTX_INCLUDE}")
+  target_compile_definitions(context_ping_pong PRIVATE BENCH_HAS_RM=1
+    BENCH_RM_LIBRARY_PATH="${BENCH_RM_LIBRARY}"
+    BENCH_INTERCEPTION_SOURCE_PATH="${BENCH_INTERCEPTION_SOURCE}")
+  target_link_libraries(context_ping_pong PRIVATE "${BENCH_RM_LIBRARY}" ${CMAKE_DL_LIBS})
+endif()

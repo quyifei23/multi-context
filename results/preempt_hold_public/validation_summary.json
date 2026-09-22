@@ -1,0 +1,12 @@
+{
+  "scope": "Recorded A100 experiment only; original process-specific evidence remains local",
+  "measured_rm_samples": 32,
+  "profiled_samples": 9,
+  "all_samples_valid": true,
+  "full_output_and_resource_reuse_passed": true,
+  "same_A_cuda_context_reuse_correlated_in_all_profiled_samples": true,
+  "fifo_payload_checked": "all eight captured A compute channels, synchronous preempt, no rewind",
+  "initial_idle_probe": "rejected before active ioctl; retained locally",
+  "trace_drop_count": "unknown",
+  "public_data": "relative timing and logical case/trial labels only; no hardware identifiers, process IDs, absolute timestamps, host paths, RM object handles or RM journals"
+}
